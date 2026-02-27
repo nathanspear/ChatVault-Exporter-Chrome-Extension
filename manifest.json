@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "Chat Vault Exporter",
+  "description": "Export AI chat conversations to durable JSON and Markdown formats. Zero network, zero telemetry — conversations never leave your browser.",
+  "version": "0.6.10",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "storage",
+    "clipboardRead",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://claude.ai/*",
+    "https://chat.openai.com/*",
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*",
+    "https://x.com/i/grok*",
+    "https://grok.com/*",
+    "https://perplexity.ai/*",
+    "https://www.perplexity.ai/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://claude.ai/chat/*",
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://gemini.google.com/*",
+        "https://x.com/i/grok*",
+        "https://grok.com/*",
+        "https://perplexity.ai/*",
+        "https://www.perplexity.ai/*"
+      ],
+      "js": ["filename-builder.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ChatVault Exporter",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

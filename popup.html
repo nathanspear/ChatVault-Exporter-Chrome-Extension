@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=380">
+  <title>Chat Vault Exporter</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 380px;
+      max-height: 560px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      color: #1a1a1a;
+      background: #fff;
+    }
+
+    .header {
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid #e5e5e5;
+    }
+
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .header h1 .icon { font-size: 18px; }
+    .header .subtitle { font-size: 11px; color: #888; margin-top: 2px; }
+
+    .content { padding: 16px; }
+
+    .status {
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .status.info { background: #f0f4ff; color: #3b5998; }
+    .status.success { background: #f0faf0; color: #2d7a3a; }
+    .status.error { background: #fff0f0; color: #c53030; }
+    .status.warning { background: #fffbf0; color: #b45309; }
+    .status .platform-name { font-weight: 600; }
+
+    /* Format selector */
+    .format-group {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .format-btn {
+      flex: 1;
+      padding: 7px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+    }
+
+    .format-btn:hover { border-color: #999; color: #333; }
+    .format-btn.active {
+      border-color: #1a1a1a;
+      background: #1a1a1a;
+      color: #fff;
+    }
+
+    .divider {
+      height: 1px;
+      background: #e5e5e5;
+      margin: 16px 0;
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #666;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .project-info {
+      padding: 8px 12px;
+      background: #f8f8f8;
+      border-radius: 6px;
+      font-size: 12px;
+      margin-bottom: 12px;
+      color: #555;
+    }
+
+    .project-info .name {
+      font-weight: 600;
+      color: #1a1a1a;
+      margin-bottom: 4px;
+    }
+
+    .project-info .count {
+      color: #888;
+    }
+
+    .chat-list-actions {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .chat-list-actions .btn-link {
+      background: none;
+      border: none;
+      color: #3b5998;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 4px 0;
+    }
+    .chat-list-actions .btn-link:hover { text-decoration: underline; }
+
+    .chat-list {
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid #e5e5e5;
+      border-radius: 6px;
+      margin-bottom: 12px;
+      padding: 6px 0;
+    }
+    .chat-list-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+    }
+    .chat-list-item:hover { background: #f5f5f5; }
+    .chat-list-item input[type="checkbox"] {
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+    .chat-list-item .chat-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #1a1a1a; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #333; }
+    .btn-primary:active:not(:disabled) { background: #000; }
+
+    .results {
+      margin-top: 12px;
+      padding: 10px 12px;
+      background: #fafafa;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.5;
+      display: none;
+    }
+
+    .results.visible { display: block; }
+
+    .results .stat {
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .results .stat-label { color: #666; }
+    .results .stat-value { font-weight: 500; }
+
+    .results .warnings {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #e5e5e5;
+      color: #b45309;
+    }
+
+    .footer {
+      padding: 8px 16px 12px;
+      border-top: 1px solid #e5e5e5;
+      text-align: center;
+    }
+
+    .footer .privacy { font-size: 10px; color: #999; }
+    .footer .privacy .lock { font-size: 11px; }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .info-icon-wrap {
+      position: relative;
+      display: inline-block;
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+
+    .info-icon {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      line-height: 14px;
+      text-align: center;
+      border-radius: 50%;
+      background: #ddd;
+      color: #666;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: help;
+      user-select: none;
+    }
+
+    .info-tooltip {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      top: calc(100% + 6px);
+      background: #333;
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1.4;
+      min-width: 280px;
+      max-width: 400px;
+      white-space: normal;
+      text-transform: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      display: none;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    .info-icon-wrap:hover .info-tooltip {
+      display: block;
+    }
+
+    .info-tooltip::after {
+      content: '';
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-bottom-color: #333;
+    }
+
+    .chat-list-hint {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 8px;
+      line-height: 1.4;
+      padding: 6px 8px;
+      background: #f8f8f8;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1><span class="icon">📦</span> Chat Vault Exporter</h1>
+    <div class="subtitle">Export AI conversations · Optimized for Claude Projects</div>
+  </div>
+
+  <div class="content">
+    <div id="status" class="status info">
+      Detecting platform...
+    </div>
+
+    <div class="section-title">Export Options</div>
+    <div style="margin-bottom: 12px;">
+      <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; cursor: pointer;">
+        <input type="checkbox" id="includeMarkdownToggle" style="cursor: pointer;" checked>
+        Include Markdown <span style="font-size: 11px; color: #888;">(default: on)</span>
+        <span class="info-icon-wrap">
+          <span class="info-icon">i</span>
+          <span class="info-tooltip">Markdown is the best format for reading and for uploading into Claude Projects. Uncheck only if you need JSON or other formats alone.</span>
+        </span>
+      </label>
+      <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; cursor: pointer;">
+        <input type="checkbox" id="includeJsonToggle" style="cursor: pointer;">
+        Include JSON <span style="font-size: 11px; color: #888;">(default: off)</span>
+        <span class="info-icon-wrap">
+          <span class="info-icon">i</span>
+          <span class="info-tooltip">Include JSON so you have a machine-readable copy of each chat (e.g. for scripts or backup). Markdown is best for reading and for Claude; turn this on if you need the raw structure too.</span>
+        </span>
+      </label>
+      <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+        <input type="checkbox" id="createZipToggle" style="cursor: pointer;">
+        Create ZIP archive <span style="font-size: 11px; color: #888;">(default: off)</span>
+        <span class="info-icon-wrap">
+          <span class="info-icon">i</span>
+          <span class="info-tooltip">Bundle the whole export into one .zip file. Useful for sharing or archiving a project. If off, each file is downloaded separately into a folder. Applies to project export only; single-chat export always downloads files directly.</span>
+        </span>
+      </label>
+    </div>
+
+    <div class="section-title">Current Chat</div>
+
+    <button id="exportBtn" class="btn btn-primary" disabled>
+      Export Chat
+    </button>
+
+    <div id="results" class="results"></div>
+
+    <div class="divider"></div>
+
+    <div class="section-title">Project Export (ChatGPT)</div>
+
+    <div class="section-title">
+      Project Name
+      <span class="info-icon-wrap">
+        <span class="info-icon">i</span>
+        <span class="info-tooltip">We couldn't reliably detect the project name from the page, so you enter it here. It's used in exported filenames. Leave blank to use 'Unassigned'.</span>
+      </span>
+    </div>
+    <div style="margin-bottom: 12px;">
+      <input 
+        type="text" 
+        id="projectNameInput" 
+        placeholder="Enter project name..." 
+        style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;"
+      />
+      <div style="font-size: 11px; color: #888; margin-top: 4px;">Used in exported filenames.</div>
+      <div id="projectNameWarning" style="font-size: 11px; color: #b45309; margin-top: 4px; display: none;">
+        Project name is blank. Using "Unassigned".
+      </div>
+      <div id="filenamePreview" style="font-size: 11px; color: #666; margin-top: 6px; font-family: monospace; display: none;"></div>
+    </div>
+
+    <div id="projectInfo" class="project-info" style="display: none;">
+      <div class="name" id="projectName">Loading...</div>
+      <div class="count" id="projectCount">0 chats</div>
+    </div>
+
+    <div id="chatListSection" style="display: none;">
+      <div class="chat-list-hint">
+        Scroll down in the project so all chats are visible on the page. If the list is incomplete, refresh the page and reopen the extension.
+      </div>
+      <div class="chat-list-actions">
+        <button type="button" id="selectAllBtn" class="btn-link">Select all</button>
+        <button type="button" id="selectNoneBtn" class="btn-link">Select none</button>
+      </div>
+      <div id="chatList" class="chat-list"></div>
+    </div>
+
+    <button id="exportProjectBtn" class="btn btn-primary" disabled>
+      Export selected
+    </button>
+  </div>
+
+  <div class="footer">
+    <div class="privacy">
+      <span class="lock">🔒</span> Conversations never leave your device. Exports save only to your Downloads folder. No telemetry or server upload.
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
