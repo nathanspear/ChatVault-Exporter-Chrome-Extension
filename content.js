@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.8.0';
+const EXTENSION_VERSION = '0.8.1';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -1420,14 +1420,12 @@ async function extractPerplexityConversation(options = {}) {
     return { turns: [], errors: ['Scroll container not found'], partial: true };
   }
 
-  // For project exports, skip scrolling to save time (content should already be loaded)
-  if (!options.skipScroll) {
-    await scrollToLoadAll(
-      scrollContainer,
-      'button[data-testid="copy-query-button"], button[aria-label="Copy Query"], .prose.text-pretty',
-      startTime
-    );
-  }
+  // Always scroll to load all content (Perplexity lazy-loads)
+  await scrollToLoadAll(
+    scrollContainer,
+    'button[data-testid="copy-query-button"], button[aria-label="Copy Query"], .prose.text-pretty',
+    startTime
+  );
 
   // Skip clipboard for Perplexity - it's too slow for project exports (can exceed 30s message timeout)
   // Use direct text extraction only for speed
@@ -2567,7 +2565,7 @@ async function handleExtraction(options) {
         extraction = await extractGrokXConversation();
         break;
       case 'perplexity':
-        extraction = await extractPerplexityConversation({ skipScroll: options.skipDownload });
+        extraction = await extractPerplexityConversation();
         break;
       default:
         return { success: false, error: `Unknown platform: ${platform}` };
