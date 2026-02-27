@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.7.4';
+const EXTENSION_VERSION = '0.7.5';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -1410,7 +1410,7 @@ function findGrokXScrollContainer() {
 // Content: .whitespace-pre-line.text-pretty.break-words (user), .prose (assistant)
 // Thread container: .max-w-threadContentWidth, [class*="threadContentWidth"], or main
 
-async function extractPerplexityConversation() {
+async function extractPerplexityConversation(options = {}) {
   const startTime = Date.now();
   const turns = [];
   const errors = [];
@@ -1420,14 +1420,18 @@ async function extractPerplexityConversation() {
     return { turns: [], errors: ['Scroll container not found'], partial: true };
   }
 
-  await scrollToLoadAll(
-    scrollContainer,
-    'button[data-testid="copy-query-button"], button[aria-label="Copy Query"], .prose.text-pretty',
-    startTime
-  );
+  // For project exports, skip scrolling to save time (content should already be loaded)
+  if (!options.skipScroll) {
+    await scrollToLoadAll(
+      scrollContainer,
+      'button[data-testid="copy-query-button"], button[aria-label="Copy Query"], .prose.text-pretty',
+      startTime
+    );
+  }
 
-  const hasClipboard = await testClipboardAccess();
-  console.log(`[Chat Archive] Perplexity: Clipboard access: ${hasClipboard}`);
+  // Skip clipboard for Perplexity - it's too slow for project exports (can exceed 30s message timeout)
+  // Use direct text extraction only for speed
+  console.log(`[Chat Archive] Perplexity: Using direct text extraction (skipping clipboard for speed)`);
 
   const queryButtons = Array.from(document.querySelectorAll('button[data-testid="copy-query-button"], button[aria-label="Copy Query"]'))
     .filter((btn) => !btn.closest('pre, code'));
@@ -1456,36 +1460,10 @@ async function extractPerplexityConversation() {
     }
 
     try {
-      btn.scrollIntoView({ behavior: 'instant', block: 'center' });
-      await wait(150);
-
-      let content = null;
-      let extractionMethod = 'direct';
-
-      if (hasClipboard) {
-        try {
-          const container = role === 'user'
-            ? findPerplexityUserRoot(btn)
-            : findPerplexityAssistantRoot(btn);
-          if (container) {
-            container.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-            await wait(SAFETY_LIMITS.HOVER_SETTLE_MS);
-          }
-          const clipContent = await clickCopyAndRead(btn);
-          if (clipContent && clipContent.trim().length > 0) {
-            content = clipContent.trim();
-            extractionMethod = 'clipboard';
-          }
-        } catch (err) {
-          console.warn(`[Chat Archive] Perplexity: Clipboard failed for ${role}:`, err);
-        }
-      }
-
-      if (!content) {
-        content = role === 'user'
-          ? extractPerplexityUserDirectText(btn)
-          : extractPerplexityAssistantDirectText(btn);
-      }
+      // Direct text extraction only (no clipboard, no scrollIntoView, no waits)
+      const content = role === 'user'
+        ? extractPerplexityUserDirectText(btn)
+        : extractPerplexityAssistantDirectText(btn);
 
       if (!content || content.trim().length === 0) continue;
 
@@ -1496,7 +1474,7 @@ async function extractPerplexityConversation() {
       turns.push(flagIfOversized({
         role,
         content: content.trim(),
-        extractionMethod,
+        extractionMethod: 'direct',
         confidence: 0.95,
         classificationSource: 'structural',
       }));
@@ -2589,7 +2567,7 @@ async function handleExtraction(options) {
         extraction = await extractGrokXConversation();
         break;
       case 'perplexity':
-        extraction = await extractPerplexityConversation();
+        extraction = await extractPerplexityConversation({ skipScroll: options.skipDownload });
         break;
       default:
         return { success: false, error: `Unknown platform: ${platform}` };

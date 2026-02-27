@@ -113,7 +113,7 @@ async function handleDownload({ content, filename, mimeType }) {
 // ---------------------------------------------------------------------------
 
 // slugForExport and buildExportFilename are provided by filename-builder.js.
-const extensionVersion = '0.7.4';
+const extensionVersion = '0.7.5';
 
 async function handleProjectExport({ project, userProjectName, chats, tabId, includeMarkdown = true, includeJson = false, createZip = false }) {
   const authorizedProjectName = (userProjectName || '').trim() || null;
@@ -154,18 +154,24 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, inc
 
         // Navigate to chat URL if needed
         const existingTab = await chrome.tabs.get(tabId);
+        const isPlatformSlow = chat.url.includes('perplexity.ai');
+        
         if (existingTab.url !== chat.url) {
           await chrome.tabs.update(tabId, { url: chat.url });
           // Wait for tab to finish loading
-          await waitForTabLoad(tabId, 10000);
-          // Extra buffer after load
-          await new Promise((resolve) => setTimeout(resolve, WAIT_AFTER_NAV_MS));
+          await waitForTabLoad(tabId, 15000);
+          // Extra buffer after load (longer for Perplexity)
+          const bufferTime = isPlatformSlow ? 3000 : WAIT_AFTER_NAV_MS;
+          await new Promise((resolve) => setTimeout(resolve, bufferTime));
         }
 
+        // Detect platform to set appropriate timeout (Perplexity needs more time)
+        const waitTimeout = isPlatformSlow ? 30000 : 15000;
+        
         // Wait for conversation DOM to be ready (polls until elements appear or timeout)
         const readyResult = await sendMessageToTab(tabId, {
           action: 'waitForConversation',
-          options: { timeout: 15000, pollInterval: 400 },
+          options: { timeout: waitTimeout, pollInterval: 400 },
         });
 
         if (!readyResult || !readyResult.ready) {
