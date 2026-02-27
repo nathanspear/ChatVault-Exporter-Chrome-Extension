@@ -519,6 +519,7 @@ exportProjectBtn.addEventListener('click', async () => {
       userProjectName,
       chats: selectedChats,
       tabId: currentTabId,
+      platform: detectedPlatform,
       includeMarkdown,
       includeJson,
       createZip,

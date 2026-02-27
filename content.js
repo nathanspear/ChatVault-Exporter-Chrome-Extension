@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.7.5';
+const EXTENSION_VERSION = '0.8.0';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -2707,6 +2707,7 @@ async function handleExtraction(options) {
   // --- Normal single-chat download path ---
   const downloadResults = [];
   const filenameBase = {
+    platform:    platform,
     projectName: resolvedProjectName,
     chatName:    resolvedChatName || null,
     chatId:      resolvedChatId,

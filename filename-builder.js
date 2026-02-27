@@ -5,13 +5,15 @@
  * Loaded by both content.js (via content_scripts) and background.js (via importScripts).
  *
  * Folder format:
- *   ChatVault-export--{ProjectSlug}--{YYYY-MM-DD}/
+ *   ChatVault-export--{Platform}--{ProjectSlug}--{YYYY-MM-DD}/
  *
  * Chat file format:
- *   ChatVault-export--{ProjectSlug}--{ChatSlug}--{YYYY-MM-DD}.{ext}
+ *   ChatVault-export--{Platform}--{ProjectSlug}--{ChatSlug}--{YYYY-MM-DD}.{ext}
  *
  * Collision variant (same name already used in this export run):
- *   ChatVault-export--{ProjectSlug}--{ChatSlug}--{shortChatId}--{YYYY-MM-DD}.{ext}
+ *   ChatVault-export--{Platform}--{ProjectSlug}--{ChatSlug}--{shortChatId}--{YYYY-MM-DD}.{ext}
+ *
+ * Platform values: ChatGPT, Claude, Perplexity, Gemini, Grok
  */
 
 /**
@@ -51,6 +53,7 @@ function slugForExport(text) {
  * Build a deterministic export filename.
  *
  * @param {object}   opts
+ * @param {string}   opts.platform     Platform name: 'chatgpt', 'claude', 'perplexity', 'gemini', 'grok'
  * @param {string}   opts.projectName  Raw project name; falsy → "Unassigned"
  * @param {string}   opts.chatName     Raw chat title; falsy → "Untitled"
  * @param {string}   opts.ext          Extension without dot: "json", "md", "zip", etc.
@@ -61,6 +64,7 @@ function slugForExport(text) {
  * @returns {string} Full filename including extension
  */
 function buildExportFilename(opts) {
+  var platform    = opts.platform;
   var projectName = opts.projectName;
   var chatName    = opts.chatName;
   var ext         = opts.ext;
@@ -72,17 +76,18 @@ function buildExportFilename(opts) {
     ? String(exportDate).slice(0, 10)
     : new Date().toISOString().slice(0, 10);
 
+  var platformSlug = slugForExport(platform) || 'Unknown';
   var pSlug = slugForExport(projectName) || 'Unassigned';
   var cSlug = slugForExport(chatName)    || 'Untitled';
 
-  var baseName = 'ChatVault-export--' + pSlug + '--' + cSlug + '--' + dateStr;
+  var baseName = 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + cSlug + '--' + dateStr;
 
   if (usedNames && usedNames.has(baseName)) {
     var shortId = (chatId || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || 'x';
-    var candidate = 'ChatVault-export--' + pSlug + '--' + cSlug + '--' + shortId + '--' + dateStr;
+    var candidate = 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + cSlug + '--' + shortId + '--' + dateStr;
     var counter = 2;
     while (usedNames.has(candidate)) {
-      candidate = 'ChatVault-export--' + pSlug + '--' + cSlug + '--' + shortId + counter + '--' + dateStr;
+      candidate = 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + cSlug + '--' + shortId + counter + '--' + dateStr;
       counter++;
     }
     baseName = candidate;
@@ -97,18 +102,21 @@ function buildExportFilename(opts) {
  * Build the export folder name (no trailing slash).
  *
  * @param {object}  opts
+ * @param {string}  opts.platform     Platform name: 'chatgpt', 'claude', 'perplexity', 'gemini', 'grok'
  * @param {string}  opts.projectName  Raw project name; falsy → "Unassigned"
  * @param {string}  [opts.exportDate] ISO date or YYYY-MM-DD; defaults to today (UTC)
- * @returns {string} e.g. "ChatVault-export--Job-Search--2026-02-21"
+ * @returns {string} e.g. "ChatVault-export--ChatGPT--Job-Search--2026-02-21"
  */
 function buildExportFolderName(opts) {
+  var platform    = opts.platform;
   var projectName = opts.projectName;
   var exportDate  = opts.exportDate;
   var dateStr = exportDate
     ? String(exportDate).slice(0, 10)
     : new Date().toISOString().slice(0, 10);
+  var platformSlug = slugForExport(platform) || 'Unknown';
   var pSlug = slugForExport(projectName) || 'Unassigned';
-  return 'ChatVault-export--' + pSlug + '--' + dateStr;
+  return 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + dateStr;
 }
 
 // Make available in both browser (window) and service worker (self) contexts.

@@ -65,28 +65,31 @@ function assertNotContains(description, actual, substring) {
 console.log('\nTest 1: User-supplied project name in filename');
 (function() {
   const result = buildExportFilename({
+    platform:    'chatgpt',
     projectName: 'Tanget',
     chatName:    'Article Request Clarification',
     ext:         'json',
     exportDate:  '2026-02-21',
   });
-  assert('full filename with user project name',
+  assert('full filename with platform and user project name',
     result,
-    'ChatVault-export--Tanget--Article-Request-Clarification--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Tanget--Article-Request-Clarification--2026-02-21.json');
   assertContains('prefix is ChatVault-export',       result, 'ChatVault-export--');
+  assertContains('platform in first segment',        result, '--Chatgpt--');
   assertContains('user project name in position',    result, '--Tanget--');
-  assertContains('chat name in third segment',       result, '--Article-Request-Clarification--');
+  assertContains('chat name in fourth segment',      result, '--Article-Request-Clarification--');
   assertContains('date in last segment before ext',  result, '--2026-02-21.json');
   
   const result2 = buildExportFilename({
+    platform:    'claude',
     projectName: 'Family',
     chatName:    'Taxes Overview',
     ext:         'md',
     exportDate:  '2026-02-21',
   });
-  assert('another user project name example',
+  assert('another platform example',
     result2,
-    'ChatVault-export--Family--Taxes-Overview--2026-02-21.md');
+    'ChatVault-export--Claude--Family--Taxes-Overview--2026-02-21.md');
 })();
 
 // ---------------------------------------------------------------------------
@@ -95,6 +98,7 @@ console.log('\nTest 1: User-supplied project name in filename');
 console.log('\nTest 2: Chat with no project uses "Unassigned"');
 (function() {
   const result = buildExportFilename({
+    platform:    'gemini',
     projectName: null,
     chatName:    'My Chat',
     ext:         'md',
@@ -102,15 +106,17 @@ console.log('\nTest 2: Chat with no project uses "Unassigned"');
   });
   assert('filename uses Unassigned for missing project',
     result,
-    'ChatVault-export--Unassigned--My-Chat--2026-02-21.md');
+    'ChatVault-export--Gemini--Unassigned--My-Chat--2026-02-21.md');
 
   const result2 = buildExportFilename({
+    platform:    'perplexity',
     projectName: '',
     chatName:    'Another Chat',
     ext:         'json',
     exportDate:  '2026-02-21',
   });
   assertContains('empty string project also gives Unassigned', result2, '--Unassigned--');
+  assertContains('platform appears in filename', result2, '--Perplexity--');
 })();
 
 // ---------------------------------------------------------------------------
@@ -119,6 +125,7 @@ console.log('\nTest 2: Chat with no project uses "Unassigned"');
 console.log('\nTest 3: Illegal characters are removed or replaced');
 (function() {
   const result = buildExportFilename({
+    platform:    'chatgpt',
     projectName: 'My/Project\\Name:Bad*Chars?"<>|',
     chatName:    'Chat: "Important" <Data>',
     ext:         'json',
@@ -144,6 +151,7 @@ console.log('\nTest 4: Collision produces deterministic shortChatId suffix');
 (function() {
   const usedNames = new Set();
   const opts = {
+    platform:    'chatgpt',
     projectName: 'Family',
     chatName:    'Taxes Overview',
     ext:         'json',
@@ -155,19 +163,19 @@ console.log('\nTest 4: Collision produces deterministic shortChatId suffix');
   const first = buildExportFilename(opts);
   assert('first filename has no collision suffix',
     first,
-    'ChatVault-export--Family--Taxes-Overview--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Family--Taxes-Overview--2026-02-21.json');
 
   // Second call with same names + same Set → collision
   const second = buildExportFilename(opts);
   assert('second filename has deterministic shortChatId suffix',
     second,
-    'ChatVault-export--Family--Taxes-Overview--abc12345--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Family--Taxes-Overview--abc12345--2026-02-21.json');
 
   // Third call — shortId+counter variant
   const third = buildExportFilename(opts);
   assert('third filename has shortId+2 suffix',
     third,
-    'ChatVault-export--Family--Taxes-Overview--abc123452--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Family--Taxes-Overview--abc123452--2026-02-21.json');
   assert('third filename differs from first',  third !== first,  true);
   assert('third filename differs from second', third !== second, true);
 })();
@@ -178,6 +186,7 @@ console.log('\nTest 4: Collision produces deterministic shortChatId suffix');
 console.log('\nTest 5: Prefix and separator format');
 (function() {
   const result = buildExportFilename({
+    platform:    'chatgpt',
     projectName: 'Job Search',
     chatName:    'LinkedIn Optimization Help',
     ext:         'md',
@@ -188,14 +197,15 @@ console.log('\nTest 5: Prefix and separator format');
   // Case is preserved (LinkedIn stays LinkedIn, not lowercased to Linkedin)
   assert('full canonical filename matches',
     result,
-    'ChatVault-export--Job-Search--LinkedIn-Optimization-Help--2026-02-20.md');
+    'ChatVault-export--Chatgpt--Job-Search--LinkedIn-Optimization-Help--2026-02-20.md');
   const parts = result.replace(/\.md$/, '').split('--');
-  assert('exactly 4 segments (prefix, project, chat, date)',
-    parts.length, 4);
+  assert('exactly 5 segments (prefix, platform, project, chat, date)',
+    parts.length, 5);
   assert('segment 0 is ChatVault-export', parts[0], 'ChatVault-export');
-  assert('segment 1 is project slug',     parts[1], 'Job-Search');
-  assert('segment 2 is chat slug',        parts[2], 'LinkedIn-Optimization-Help');
-  assert('segment 3 is date',             parts[3], '2026-02-20');
+  assert('segment 1 is platform slug',    parts[1], 'Chatgpt');
+  assert('segment 2 is project slug',     parts[2], 'Job-Search');
+  assert('segment 3 is chat slug',        parts[3], 'LinkedIn-Optimization-Help');
+  assert('segment 4 is date',             parts[4], '2026-02-20');
 })();
 
 // ---------------------------------------------------------------------------
@@ -206,6 +216,7 @@ console.log('\nTest 6: UI project name "Apps" propagates correctly (regression f
   // Simulate what background.js does when authorizedProjectName = "Apps"
   // and chat title is "Apps: App Ideas & Suggestions"
   const result = buildExportFilename({
+    platform:    'chatgpt',
     projectName: 'Apps',
     chatName:    'Apps: App Ideas & Suggestions',
     ext:         'md',
@@ -215,7 +226,7 @@ console.log('\nTest 6: UI project name "Apps" propagates correctly (regression f
   assertNotContains('filename does NOT contain --Unassigned--', result, '--Unassigned--');
   assert('full filename matches expected',
     result,
-    'ChatVault-export--Apps--Apps-App-Ideas-Suggestions--2026-02-21.md');
+    'ChatVault-export--Chatgpt--Apps--Apps-App-Ideas-Suggestions--2026-02-21.md');
 })();
 
 // ---------------------------------------------------------------------------
@@ -224,6 +235,7 @@ console.log('\nTest 6: UI project name "Apps" propagates correctly (regression f
 console.log('\nTest 7: Blank project name → Unassigned (and only then)');
 (function() {
   const blank = buildExportFilename({
+    platform:    'claude',
     projectName: null,
     chatName:    'Some Chat',
     ext:         'json',
@@ -232,6 +244,7 @@ console.log('\nTest 7: Blank project name → Unassigned (and only then)');
   assertContains('null project name → Unassigned', blank, '--Unassigned--');
 
   const empty = buildExportFilename({
+    platform:    'claude',
     projectName: '',
     chatName:    'Some Chat',
     ext:         'json',
@@ -240,6 +253,7 @@ console.log('\nTest 7: Blank project name → Unassigned (and only then)');
   assertContains('empty string project name → Unassigned', empty, '--Unassigned--');
 
   const provided = buildExportFilename({
+    platform:    'claude',
     projectName: 'Apps',
     chatName:    'Some Chat',
     ext:         'json',
@@ -255,30 +269,33 @@ console.log('\nTest 7: Blank project name → Unassigned (and only then)');
 console.log('\nTest 8: buildExportFolderName — flat folder naming');
 (function() {
   const result = buildExportFolderName({
+    platform:    'chatgpt',
     projectName: 'Job Search',
     exportDate:  '2026-02-21',
   });
-  assert('folder name with project',
+  assert('folder name with platform and project',
     result,
-    'ChatVault-export--Job-Search--2026-02-21');
+    'ChatVault-export--Chatgpt--Job-Search--2026-02-21');
   assert('starts with correct prefix',
     result.startsWith('ChatVault-export--'), true);
 
   const unassigned = buildExportFolderName({
+    platform:    'perplexity',
     projectName: null,
     exportDate:  '2026-02-21',
   });
   assert('blank project → Unassigned folder',
     unassigned,
-    'ChatVault-export--Unassigned--2026-02-21');
+    'ChatVault-export--Perplexity--Unassigned--2026-02-21');
 
   const emptyStr = buildExportFolderName({
+    platform:    'claude',
     projectName: '',
     exportDate:  '2026-02-21',
   });
   assert('empty project → Unassigned folder',
     emptyStr,
-    'ChatVault-export--Unassigned--2026-02-21');
+    'ChatVault-export--Claude--Unassigned--2026-02-21');
 })();
 
 // ---------------------------------------------------------------------------
@@ -287,17 +304,20 @@ console.log('\nTest 8: buildExportFolderName — flat folder naming');
 console.log('\nTest 9: Flat folder — required index files exist');
 (function() {
   // Simulate what background.js assembles
+  const platform    = 'chatgpt';
   const projectName = 'Job Search';
   const exportDate  = '2026-02-21';
-  const folderName  = buildExportFolderName({ projectName, exportDate });
+  const folderName  = buildExportFolderName({ platform, projectName, exportDate });
 
   const mdFile = buildExportFilename({
+    platform,
     projectName,
     chatName:   'LinkedIn Optimization Help',
     ext:        'md',
     exportDate,
   });
   const jsonFile = buildExportFilename({
+    platform,
     projectName,
     chatName:   'LinkedIn Optimization Help',
     ext:        'json',
@@ -314,16 +334,16 @@ console.log('\nTest 9: Flat folder — required index files exist');
 
   requiredFiles.forEach(function(f) {
     assert('required file path is well-formed: ' + f,
-      f.startsWith('ChatVault-export--Job-Search--2026-02-21/'), true);
+      f.startsWith('ChatVault-export--Chatgpt--Job-Search--2026-02-21/'), true);
   });
 
   assert('chat md file in folder',
     `${folderName}/${mdFile}`,
-    'ChatVault-export--Job-Search--2026-02-21/ChatVault-export--Job-Search--LinkedIn-Optimization-Help--2026-02-21.md');
+    'ChatVault-export--Chatgpt--Job-Search--2026-02-21/ChatVault-export--Chatgpt--Job-Search--LinkedIn-Optimization-Help--2026-02-21.md');
 
   assert('chat json file in folder',
     `${folderName}/${jsonFile}`,
-    'ChatVault-export--Job-Search--2026-02-21/ChatVault-export--Job-Search--LinkedIn-Optimization-Help--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Job-Search--2026-02-21/ChatVault-export--Chatgpt--Job-Search--LinkedIn-Optimization-Help--2026-02-21.json');
 })();
 
 // ---------------------------------------------------------------------------
@@ -336,6 +356,7 @@ console.log('\nTest 10: includeJson toggle — off means no json chat files');
   const files = [];
 
   const mdFilename = buildExportFilename({
+    platform:    'chatgpt',
     projectName: 'Family',
     chatName:    'Summer Plans',
     ext:         'md',
@@ -362,6 +383,7 @@ console.log('\nTest 11: includeJson toggle — on means json chat files exist');
   const files = [];
 
   const mdFilename = buildExportFilename({
+    platform:    'chatgpt',
     projectName: 'Family',
     chatName:    'Summer Plans',
     ext:         'md',
@@ -378,7 +400,7 @@ console.log('\nTest 11: includeJson toggle — on means json chat files exist');
   assert('json file is present when includeJson is true', files.some(function(f) { return f.endsWith('.json'); }), true);
   assert('json filename matches md filename with swapped ext',
     files[1],
-    'ChatVault-export--Family--Summer-Plans--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Family--Summer-Plans--2026-02-21.json');
 })();
 
 // ---------------------------------------------------------------------------
@@ -390,7 +412,7 @@ console.log('\nTest 12: createZip toggle — off means no zip created');
   let zipFilename = null;
 
   if (createZip) {
-    const folderName = buildExportFolderName({ projectName: 'Family', exportDate: '2026-02-21' });
+    const folderName = buildExportFolderName({ platform: 'chatgpt', projectName: 'Family', exportDate: '2026-02-21' });
     zipFilename = folderName + '.zip';
   }
 
@@ -406,13 +428,13 @@ console.log('\nTest 13: createZip toggle — on means zip filename is correct');
   let zipFilename = null;
 
   if (createZip) {
-    const folderName = buildExportFolderName({ projectName: 'Family', exportDate: '2026-02-21' });
+    const folderName = buildExportFolderName({ platform: 'chatgpt', projectName: 'Family', exportDate: '2026-02-21' });
     zipFilename = folderName + '.zip';
   }
 
   assert('zip filename correct when createZip is true',
     zipFilename,
-    'ChatVault-export--Family--2026-02-21.zip');
+    'ChatVault-export--Chatgpt--Family--2026-02-21.zip');
   assert('zip has .zip extension', zipFilename.endsWith('.zip'), true);
 })();
 

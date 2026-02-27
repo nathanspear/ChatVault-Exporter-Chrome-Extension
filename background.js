@@ -113,15 +113,16 @@ async function handleDownload({ content, filename, mimeType }) {
 // ---------------------------------------------------------------------------
 
 // slugForExport and buildExportFilename are provided by filename-builder.js.
-const extensionVersion = '0.7.5';
+const extensionVersion = '0.8.0';
 
-async function handleProjectExport({ project, userProjectName, chats, tabId, includeMarkdown = true, includeJson = false, createZip = false }) {
+async function handleProjectExport({ project, userProjectName, chats, tabId, platform, includeMarkdown = true, includeJson = false, createZip = false }) {
   const authorizedProjectName = (userProjectName || '').trim() || null;
-  console.log('[ChatVault] Project export — project name:', authorizedProjectName ?? '(blank → Unassigned)', '| includeMarkdown:', includeMarkdown, '| includeJson:', includeJson, '| createZip:', createZip);
+  console.log('[ChatVault] Project export — platform:', platform, '| project name:', authorizedProjectName ?? '(blank → Unassigned)', '| includeMarkdown:', includeMarkdown, '| includeJson:', includeJson, '| createZip:', createZip);
 
   const dateStr    = new Date().toISOString().slice(0, 10);
+  const platformSlug = slugForExport(platform) || 'Unknown';
   const pSlug      = slugForExport(authorizedProjectName || '') || 'Unassigned';
-  const folderName = `ChatVault-export--${pSlug}--${dateStr}`;
+  const folderName = `ChatVault-export--${platformSlug}--${pSlug}--${dateStr}`;
   const usedNames  = new Set();
 
   const collectedFiles = []; // { filename, content, mimeType }
@@ -207,6 +208,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, inc
 
           const primaryExt = includeMarkdown ? 'md' : 'json';
           const primaryFilename = buildExportFilename({
+            platform,
             projectName: authorizedProjectName,
             chatName,
             ext: primaryExt,
