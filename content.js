@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.8.1';
+const EXTENSION_VERSION = '0.8.2';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -196,6 +196,9 @@ async function scrollToLoadAll(scrollContainer, countSelector, startTime) {
   let stableIterations = 0;
   let scrollIterations = 0;
 
+  const initialScrollHeight = scrollContainer.scrollHeight;
+  console.log(`[Chat Archive] Scroll: Initial height=${initialScrollHeight}, clientHeight=${scrollContainer.clientHeight}`);
+  
   scrollContainer.scrollTop = 0;
   await wait(500);
 
@@ -206,14 +209,19 @@ async function scrollToLoadAll(scrollContainer, countSelector, startTime) {
     if (startTime && Date.now() - startTime > SAFETY_LIMITS.MAX_EXTRACTION_TIME_MS) break;
 
     const currentElements = document.querySelectorAll(countSelector);
-    if (currentElements.length === previousCount) {
+    const currentCount = currentElements.length;
+    console.log(`[Chat Archive] Scroll iteration ${scrollIterations}: found ${currentCount} elements (prev: ${previousCount}), stable: ${stableIterations}`);
+    
+    if (currentCount === previousCount) {
       stableIterations++;
     } else {
       stableIterations = 0;
-      previousCount = currentElements.length;
+      previousCount = currentCount;
     }
 
-    scrollContainer.scrollBy(0, scrollContainer.clientHeight * 0.8);
+    const scrollAmount = scrollContainer.clientHeight * 0.8;
+    console.log(`[Chat Archive] Scrolling by ${scrollAmount}px, current scrollTop: ${scrollContainer.scrollTop}`);
+    scrollContainer.scrollBy(0, scrollAmount);
     await wait(SAFETY_LIMITS.SCROLL_STEP_DELAY_MS);
     scrollIterations++;
   }
@@ -1416,16 +1424,25 @@ async function extractPerplexityConversation(options = {}) {
   const errors = [];
 
   const scrollContainer = findPerplexityScrollContainer();
+  console.log('[Chat Archive] Perplexity: Scroll container found:', scrollContainer?.tagName, scrollContainer?.className);
   if (!scrollContainer) {
     return { turns: [], errors: ['Scroll container not found'], partial: true };
   }
 
+  // Visual indicator: flash the scroll container border
+  const originalBorder = scrollContainer.style.border;
+  scrollContainer.style.border = '3px solid red';
+  await wait(500);
+  scrollContainer.style.border = originalBorder;
+
   // Always scroll to load all content (Perplexity lazy-loads)
-  await scrollToLoadAll(
+  console.log('[Chat Archive] Perplexity: Starting scroll-to-load...');
+  const scrollCount = await scrollToLoadAll(
     scrollContainer,
     'button[data-testid="copy-query-button"], button[aria-label="Copy Query"], .prose.text-pretty',
     startTime
   );
+  console.log('[Chat Archive] Perplexity: Scroll complete, performed', scrollCount, 'scrolls');
 
   // Skip clipboard for Perplexity - it's too slow for project exports (can exceed 30s message timeout)
   // Use direct text extraction only for speed
