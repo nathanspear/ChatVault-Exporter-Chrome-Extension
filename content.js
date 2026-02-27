@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.7.1';
+const EXTENSION_VERSION = '0.7.2';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -2456,7 +2456,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (platform === 'claude') {
       sendResponse(discoverClaudeProjects());
     } else if (platform === 'perplexity') {
-      sendResponse(discoverPerplexitySpaces());
+      // Perplexity returns { spaces }, normalize to { projects } for consistency
+      const result = discoverPerplexitySpaces();
+      sendResponse({ projects: result.spaces || [] });
     } else {
       sendResponse({ error: 'Platform does not support projects/spaces', projects: [] });
     }
@@ -2470,7 +2472,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (platform === 'claude') {
       sendResponse(discoverClaudeChatsInCurrentProject());
     } else if (platform === 'perplexity') {
-      sendResponse(discoverPerplexityThreadsInCurrentSpace());
+      // Perplexity returns { threads }, normalize to { chats } for consistency
+      const result = discoverPerplexityThreadsInCurrentSpace();
+      sendResponse({ chats: result.threads || [] });
     } else {
       sendResponse({ error: 'Platform does not support projects/spaces', chats: [] });
     }
