@@ -113,7 +113,7 @@ async function handleDownload({ content, filename, mimeType }) {
 // ---------------------------------------------------------------------------
 
 // slugForExport and buildExportFilename are provided by filename-builder.js.
-const extensionVersion = '0.7.0';
+const extensionVersion = '0.7.1';
 
 async function handleProjectExport({ project, userProjectName, chats, tabId, includeMarkdown = true, includeJson = false, createZip = false }) {
   const authorizedProjectName = (userProjectName || '').trim() || null;

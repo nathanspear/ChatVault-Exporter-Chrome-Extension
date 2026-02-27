@@ -218,8 +218,18 @@ async function init() {
         exportBtn.disabled = false;
 
         // Load project/space info for platforms that support it
+        // Only load if we're actually on a project/space page to avoid interfering with single-chat export
         if (detectedPlatform === 'chatgpt' || detectedPlatform === 'claude' || detectedPlatform === 'perplexity') {
-          await loadProjectInfo();
+          try {
+            const projectResponse = await sendToTab(currentTabId, { action: 'getCurrentProject' });
+            // Only call loadProjectInfo if we're actually on a project/space page
+            if (projectResponse?.project) {
+              await loadProjectInfo();
+            }
+          } catch (err) {
+            // If project detection fails, that's ok - user is probably on a single chat page
+            console.log('Not on a project/space page, skipping project info load');
+          }
         }
       } else {
         showStatus(
@@ -460,13 +470,16 @@ async function loadProjectInfo() {
           message = 'No chats in this project. Expand the list or reopen the extension.';
         }
       }
-      showStatus('warning', message);
+      // Don't overwrite the main status - show project info only
+      projectInfoEl.textContent = message;
+      projectInfoEl.style.color = '#b45309';
     } else {
       chatListSection.style.display = 'block';
       renderChatList();
     }
   } catch (err) {
     console.warn('Could not load project info:', err);
+    // Don't let project info errors break single-chat export
   }
 }
 
