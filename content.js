@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.7.2';
+const EXTENSION_VERSION = '0.7.3';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -2381,30 +2381,53 @@ function discoverPerplexityThreadsInCurrentSpace() {
   const threads = [];
   const seenIds = new Set();
   
-  // Look for thread links: a[href^="/search/"] in main content
-  const threadLinks = document.querySelectorAll('a.group[href^="/search/"], a[href^="/search/"]');
-  
-  for (const link of threadLinks) {
+  function addThread(link) {
     const href = link.getAttribute('href');
-    if (!href) continue;
-    
-    // Extract thread ID from URL: /search/research-evidence-based-strate-e06pwii_TgWUupLcKN.sRg
+    if (!href) return;
     const match = href.match(/\/search\/(.+)/);
-    if (!match) continue;
-    
+    if (!match) return;
     const threadId = match[1];
-    if (seenIds.has(threadId)) continue;
+    if (seenIds.has(threadId)) return;
     seenIds.add(threadId);
-    
-    // Find title - look for [data-testid^="thread-title-"] or text content
     const titleEl = link.querySelector('[data-testid^="thread-title-"]');
     const title = titleEl?.textContent?.trim() || link.textContent?.trim()?.split('\n')[0] || `Thread ${threadId}`;
-    
     threads.push({
       id: threadId,
       title,
       url: href.startsWith('http') ? href : `https://www.perplexity.ai${href}`,
     });
+  }
+  
+  function isInsideLeftNav(link) {
+    for (const root of leftNavRoots) {
+      if (root.contains(link)) return true;
+    }
+    return false;
+  }
+  
+  const isSpacePage = /\/spaces\/[^\/]+/.test(window.location.href);
+  
+  // Find left nav containers (sidebar with all threads)
+  const leftNavRoots = [
+    ...document.querySelectorAll('aside'),
+    ...document.querySelectorAll('nav'),
+    ...document.querySelectorAll('[class*="sidebar" i]'),
+    ...document.querySelectorAll('[data-testid*="sidebar" i]'),
+    ...document.querySelectorAll('[aria-label*="sidebar" i]'),
+  ].filter((el) => el && el.isConnected);
+  
+  if (isSpacePage) {
+    // Space is selected: only list threads in the main content. Exclude anything in left nav.
+    const allThreadLinks = document.querySelectorAll('a.group[href^="/search/"], a[href^="/search/"]');
+    for (const link of allThreadLinks) {
+      if (isInsideLeftNav(link)) continue;
+      addThread(link);
+    }
+  } else {
+    // No space selected: list threads from the left nav only.
+    for (const root of leftNavRoots) {
+      root.querySelectorAll('a.group[href^="/search/"], a[href^="/search/"]').forEach(addThread);
+    }
   }
   
   return { threads };

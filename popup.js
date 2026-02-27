@@ -190,7 +190,7 @@ async function init() {
 
     const url = tab.url || '';
     const supportedDomains = [
-      'claude.ai/chat',
+      'claude.ai',
       'chat.openai.com',
       'chatgpt.com',
       'gemini.google.com',
