@@ -1,6 +1,6 @@
 # ChatVault Exporter Extension
 
-**Version**: 0.8.1
+**Version**: 0.8.3
 
 A Chrome extension for exporting AI chat conversations to JSON and Markdown formats. Supports single-chat and full project/space exports, optimized for Claude Projects.
 
@@ -16,10 +16,11 @@ A Chrome extension for exporting AI chat conversations to JSON and Markdown form
 ### Project/Space Export ✅
 - **ChatGPT Projects**
 - **Claude Projects**
-- **Perplexity Spaces**
 
-### Not Yet Supported
+### Not Supported
+- **Perplexity Spaces** (single-thread export works, but Space export disabled due to performance issues)
 - **Gemini Projects** (Gemini doesn't have projects yet)
+- **Grok Projects** (Grok doesn't have projects yet)
 
 ## Features
 
@@ -73,16 +74,6 @@ A Chrome extension for exporting AI chat conversations to JSON and Markdown form
 7. Wait for the export to complete
 8. All files are saved directly to your browser's **default Downloads folder**
 
-#### Perplexity Spaces
-1. Navigate to `perplexity.ai/spaces` or open a specific Perplexity Space
-2. Wait for threads to load
-3. Click the ChatVault Exporter extension icon
-4. Enter a **Space Name** in the text field
-5. Configure export options
-6. Click "Export Space"
-7. Wait for the export to complete
-8. All files are saved directly to your browser's **default Downloads folder**
-
 **Output Structure** (flat folder, optimized for Claude Projects):
 ```
 ChatVault-export--<Platform>--<ProjectName>--<YYYY-MM-DD>/
@@ -128,11 +119,10 @@ ChatVault-export--<ProjectName>--<ChatName>--<YYYY-MM-DD>.<ext>
 
 - **"Content script not loaded"**: Refresh the page and try again
 - **"No conversation turns found"**: Make sure you're on a conversation page with visible messages
-- **Project export button disabled**: 
+- **Project export button disabled**:
   - ChatGPT: Select a project and ensure chats are loaded in the main pane
   - Claude: Open a project page (`claude.ai/project/...`) to see conversations
-  - Perplexity: Open a space page (`perplexity.ai/spaces/...`) to see threads
-- **Missing chats in project export**: Scroll through the entire project/space to load all items, then refresh the extension
+- **Missing chats in project export**: Scroll through the entire project to load all items, then refresh the extension
 - **Export stalls**: The extension waits between chats to avoid rate limiting. This is normal.
 - **Can't find exported files**: Check your browser's default Downloads folder, or open `chrome://downloads` to see the exact save location
 
@@ -144,6 +134,10 @@ ChatVault-export--<ProjectName>--<ChatName>--<YYYY-MM-DD>.<ext>
 - Conversations never leave your device
 
 ## Version History
+
+**0.8.3** - Removed: Perplexity Spaces support (too slow/unreliable). Single-thread export still works.
+
+**0.8.2** - Debug: Added logging for Perplexity scroll diagnostics
 
 **0.8.1** - Bugfix: Perplexity extraction now scrolls to load all content (fixed regression)
 

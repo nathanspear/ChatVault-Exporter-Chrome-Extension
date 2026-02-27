@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.8.2';
+const EXTENSION_VERSION = '0.8.3';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -2493,11 +2493,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(discoverChatGPTProjects());
     } else if (platform === 'claude') {
       sendResponse(discoverClaudeProjects());
-    } else if (platform === 'perplexity') {
-      // Perplexity returns { spaces }, normalize to { projects } for consistency
-      const result = discoverPerplexitySpaces();
-      sendResponse({ projects: result.spaces || [] });
     } else {
+      // Perplexity Spaces not supported (extraction too slow/unreliable)
       sendResponse({ error: 'Platform does not support projects/spaces', projects: [] });
     }
     return;
@@ -2509,11 +2506,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(discoverChatGPTChatsInCurrentProject());
     } else if (platform === 'claude') {
       sendResponse(discoverClaudeChatsInCurrentProject());
-    } else if (platform === 'perplexity') {
-      // Perplexity returns { threads }, normalize to { chats } for consistency
-      const result = discoverPerplexityThreadsInCurrentSpace();
-      sendResponse({ chats: result.threads || [] });
     } else {
+      // Perplexity Spaces not supported (extraction too slow/unreliable)
       sendResponse({ error: 'Platform does not support projects/spaces', chats: [] });
     }
     return;
@@ -2527,10 +2521,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (platform === 'claude') {
       const project = getCurrentClaudeProject();
       sendResponse({ project });
-    } else if (platform === 'perplexity') {
-      const space = getCurrentPerplexitySpace();
-      sendResponse({ project: space }); // Use 'project' key for consistency
     } else {
+      // Perplexity Spaces not supported
       sendResponse({ project: null });
     }
     return;

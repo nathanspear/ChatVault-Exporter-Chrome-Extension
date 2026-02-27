@@ -219,7 +219,8 @@ async function init() {
 
         // Load project/space info for platforms that support it
         // Only load if we're actually on a project/space page to avoid interfering with single-chat export
-        if (detectedPlatform === 'chatgpt' || detectedPlatform === 'claude' || detectedPlatform === 'perplexity') {
+        // Note: Perplexity Spaces removed due to extraction performance issues
+        if (detectedPlatform === 'chatgpt' || detectedPlatform === 'claude') {
           try {
             const projectResponse = await sendToTab(currentTabId, { action: 'getCurrentProject' });
             // Only call loadProjectInfo if we're actually on a project/space page
