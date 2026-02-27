@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.6.10';
+const EXTENSION_VERSION = '0.7.0';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -2261,6 +2261,168 @@ function getCurrentChatGPTProject() {
   return null;
 }
 
+// ============================================================================
+// Claude Projects Discovery
+// ============================================================================
+
+function discoverClaudeProjects() {
+  const projects = [];
+  
+  // Look for project cards on claude.ai/projects page
+  // Projects are linked with href="/project/[uuid]"
+  const projectLinks = document.querySelectorAll('a[href*="/project/"]');
+  
+  for (const link of projectLinks) {
+    const href = link.getAttribute('href');
+    if (!href || !href.includes('/project/')) continue;
+    
+    // Extract project ID from URL: /project/019ca130-e1a3-7744-b81a-c59ac3b2a31f
+    const match = href.match(/\/project\/([a-f0-9-]+)/);
+    if (!match) continue;
+    
+    const projectId = match[1];
+    
+    // Find project name - look for .font-base-bold or text content
+    const nameEl = link.querySelector('.font-base-bold, [class*="truncate"]');
+    const projectName = nameEl?.textContent?.trim() || link.textContent?.trim() || `Project ${projectId}`;
+    
+    projects.push({
+      id: projectId,
+      name: projectName,
+      url: href.startsWith('http') ? href : `https://claude.ai${href}`,
+    });
+  }
+  
+  return { projects };
+}
+
+function discoverClaudeChatsInCurrentProject() {
+  const chats = [];
+  const seenIds = new Set();
+  
+  // Look for conversation links with data-dd-action-name="conversation-cell"
+  // or a[href^="/chat/"] in the main content area
+  const chatLinks = document.querySelectorAll('a[data-dd-action-name="conversation-cell"], a[href^="/chat/"]');
+  
+  for (const link of chatLinks) {
+    const href = link.getAttribute('href');
+    if (!href || !href.includes('/chat/')) continue;
+    
+    // Extract chat ID from URL: /chat/4d3f86ec-f839-4192-ad6b-4d099eb71a7e
+    const match = href.match(/\/chat\/([a-f0-9-]+)/);
+    if (!match) continue;
+    
+    const chatId = match[1];
+    if (seenIds.has(chatId)) continue;
+    seenIds.add(chatId);
+    
+    // Find title - look for .truncate.font-base or nested text
+    const titleEl = link.querySelector('.truncate.font-base, .font-base, [class*="truncate"]');
+    const title = titleEl?.textContent?.trim() || link.textContent?.trim()?.split('\n')[0] || `Chat ${chatId}`;
+    
+    chats.push({
+      id: chatId,
+      title,
+      url: href.startsWith('http') ? href : `https://claude.ai${href}`,
+    });
+  }
+  
+  return { chats };
+}
+
+function getCurrentClaudeProject() {
+  const url = window.location.href;
+  
+  // Match: https://claude.ai/project/019ca130-e1a3-7744-b81a-c59ac3b2a31f
+  const match = url.match(/\/project\/([a-f0-9-]+)/);
+  if (!match) return null;
+  
+  return {
+    id: match[1],
+    name: null, // User will provide via UI
+  };
+}
+
+// ============================================================================
+// Perplexity Spaces Discovery
+// ============================================================================
+
+function discoverPerplexitySpaces() {
+  const spaces = [];
+  
+  // Look for space cards on perplexity.ai/spaces page
+  // Selector: a[href*="/spaces/"] that's not just "/spaces"
+  const spaceLinks = document.querySelectorAll('a[href*="/spaces/"]');
+  
+  for (const link of spaceLinks) {
+    const href = link.getAttribute('href');
+    if (!href || href === '/spaces') continue;
+    
+    // Extract space slug-id from URL: /spaces/personal-fitness-weight-loss-tyjqwKgUTX6KVsEIHgLBKA
+    const match = href.match(/\/spaces\/([^\/\?]+)/);
+    if (!match) continue;
+    
+    const spaceId = match[1];
+    
+    // Find space name from link text content
+    const spaceName = link.textContent?.trim() || `Space ${spaceId}`;
+    
+    spaces.push({
+      id: spaceId,
+      name: spaceName,
+      url: href.startsWith('http') ? href : `https://www.perplexity.ai${href}`,
+    });
+  }
+  
+  return { spaces };
+}
+
+function discoverPerplexityThreadsInCurrentSpace() {
+  const threads = [];
+  const seenIds = new Set();
+  
+  // Look for thread links: a[href^="/search/"] in main content
+  const threadLinks = document.querySelectorAll('a.group[href^="/search/"], a[href^="/search/"]');
+  
+  for (const link of threadLinks) {
+    const href = link.getAttribute('href');
+    if (!href) continue;
+    
+    // Extract thread ID from URL: /search/research-evidence-based-strate-e06pwii_TgWUupLcKN.sRg
+    const match = href.match(/\/search\/(.+)/);
+    if (!match) continue;
+    
+    const threadId = match[1];
+    if (seenIds.has(threadId)) continue;
+    seenIds.add(threadId);
+    
+    // Find title - look for [data-testid^="thread-title-"] or text content
+    const titleEl = link.querySelector('[data-testid^="thread-title-"]');
+    const title = titleEl?.textContent?.trim() || link.textContent?.trim()?.split('\n')[0] || `Thread ${threadId}`;
+    
+    threads.push({
+      id: threadId,
+      title,
+      url: href.startsWith('http') ? href : `https://www.perplexity.ai${href}`,
+    });
+  }
+  
+  return { threads };
+}
+
+function getCurrentPerplexitySpace() {
+  const url = window.location.href;
+  
+  // Match: https://www.perplexity.ai/spaces/personal-fitness-weight-loss-tyjqwKgUTX6KVsEIHgLBKA
+  const match = url.match(/\/spaces\/([^\/\?]+)/);
+  if (!match) return null;
+  
+  return {
+    id: match[1],
+    name: null, // User will provide via UI
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'detect') {
     const platform = detectPlatform();
@@ -2291,8 +2453,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const platform = detectPlatform();
     if (platform === 'chatgpt') {
       sendResponse(discoverChatGPTProjects());
+    } else if (platform === 'claude') {
+      sendResponse(discoverClaudeProjects());
+    } else if (platform === 'perplexity') {
+      sendResponse(discoverPerplexitySpaces());
     } else {
-      sendResponse({ error: 'Project discovery only supported on ChatGPT', projects: [] });
+      sendResponse({ error: 'Platform does not support projects/spaces', projects: [] });
     }
     return;
   }
@@ -2301,8 +2467,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const platform = detectPlatform();
     if (platform === 'chatgpt') {
       sendResponse(discoverChatGPTChatsInCurrentProject());
+    } else if (platform === 'claude') {
+      sendResponse(discoverClaudeChatsInCurrentProject());
+    } else if (platform === 'perplexity') {
+      sendResponse(discoverPerplexityThreadsInCurrentSpace());
     } else {
-      sendResponse({ error: 'Chat discovery only supported on ChatGPT', chats: [] });
+      sendResponse({ error: 'Platform does not support projects/spaces', chats: [] });
     }
     return;
   }
@@ -2312,8 +2482,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (platform === 'chatgpt') {
       const project = getCurrentChatGPTProject();
       sendResponse({ project });
+    } else if (platform === 'claude') {
+      const project = getCurrentClaudeProject();
+      sendResponse({ project });
+    } else if (platform === 'perplexity') {
+      const space = getCurrentPerplexitySpace();
+      sendResponse({ project: space }); // Use 'project' key for consistency
     } else {
-      sendResponse({ error: 'Project detection only supported on ChatGPT', project: null });
+      sendResponse({ project: null });
     }
     return;
   }

@@ -217,7 +217,8 @@ async function init() {
         );
         exportBtn.disabled = false;
 
-        if (detectedPlatform === 'chatgpt') {
+        // Load project/space info for platforms that support it
+        if (detectedPlatform === 'chatgpt' || detectedPlatform === 'claude' || detectedPlatform === 'perplexity') {
           await loadProjectInfo();
         }
       } else {
@@ -412,21 +413,54 @@ async function loadProjectInfo() {
     const chats = chatsResponse?.chats || [];
 
     currentChats = chats;
+    
+    // Update section title based on platform
+    const projectExportTitle = document.getElementById('projectExportTitle');
+    if (detectedPlatform === 'claude') {
+      projectExportTitle.textContent = 'Project Export (Claude)';
+    } else if (detectedPlatform === 'perplexity') {
+      projectExportTitle.textContent = 'Space Export (Perplexity)';
+    } else if (detectedPlatform === 'chatgpt') {
+      projectExportTitle.textContent = 'Project Export (ChatGPT)';
+    } else {
+      projectExportTitle.textContent = 'Project Export';
+    }
 
     if (projectResponse?.project) {
       currentProject = projectResponse.project;
       projectNameEl.textContent = currentProject.name;
-      projectCountEl.textContent = `${chats.length} chat${chats.length !== 1 ? 's' : ''} in this project`;
+      
+      // Platform-specific terminology
+      const itemLabel = detectedPlatform === 'perplexity' ? 'thread' : 'chat';
+      const containerLabel = detectedPlatform === 'perplexity' ? 'space' : 'project';
+      projectCountEl.textContent = `${chats.length} ${itemLabel}${chats.length !== 1 ? 's' : ''} in this ${containerLabel}`;
     } else {
       currentProject = { id: 'individual', name: 'Individual chats' };
       projectNameEl.textContent = 'Individual chats';
-      projectCountEl.textContent = chats.length === 0 ? 'No chats in left nav' : `${chats.length} chat${chats.length !== 1 ? 's' : ''} (left nav)`;
+      const itemLabel = detectedPlatform === 'perplexity' ? 'thread' : 'chat';
+      projectCountEl.textContent = chats.length === 0 ? `No ${itemLabel}s in left nav` : `${chats.length} ${itemLabel}${chats.length !== 1 ? 's' : ''} (left nav)`;
     }
 
     projectInfoEl.style.display = 'block';
     if (chats.length === 0) {
       chatListSection.style.display = 'none';
-      showStatus('warning', currentProject.id === 'individual' ? 'No chats in left nav. Open a project or select a chat to see the list.' : 'No chats in this project. Expand the list or reopen the extension.');
+      
+      // Platform-specific messages
+      let message;
+      if (currentProject.id === 'individual') {
+        message = detectedPlatform === 'perplexity' 
+          ? 'No threads in left nav. Open a space or select a thread to see the list.'
+          : 'No chats in left nav. Open a project or select a chat to see the list.';
+      } else {
+        if (detectedPlatform === 'claude') {
+          message = 'Claude Project found but no conversations listed. Open the project page to see conversations, then reopen the extension.';
+        } else if (detectedPlatform === 'perplexity') {
+          message = 'Perplexity Space found but no threads listed. Open the space page to see threads, then reopen the extension.';
+        } else {
+          message = 'No chats in this project. Expand the list or reopen the extension.';
+        }
+      }
+      showStatus('warning', message);
     } else {
       chatListSection.style.display = 'block';
       renderChatList();

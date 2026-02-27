@@ -1,18 +1,25 @@
 # ChatVault Exporter Extension
 
-**Version**: 0.6.10
+**Version**: 0.7.0
 
-A Chrome extension for exporting AI chat conversations to JSON and Markdown formats. Supports single-chat and full project exports, optimized for Claude Projects.
+A Chrome extension for exporting AI chat conversations to JSON and Markdown formats. Supports single-chat and full project/space exports, optimized for Claude Projects.
 
 ## Supported Platforms
 
-- **ChatGPT** (chat.openai.com, chatgpt.com) — single chat and project export
-- **Claude.ai** — single chat
-- **Google Gemini** — single chat
-- **Perplexity.ai** — single chat
-- **Grok** (grok.com, x.com/i/grok) — single chat
+### Single-Chat Export ✅
+- **ChatGPT** (chat.openai.com, chatgpt.com)
+- **Claude.ai**
+- **Google Gemini**
+- **Perplexity.ai**
+- **Grok** (grok.com, x.com/i/grok)
 
-**Note**: Project export (batch export of multiple chats) is only supported on ChatGPT.
+### Project/Space Export ✅
+- **ChatGPT Projects**
+- **Claude Projects**
+- **Perplexity Spaces**
+
+### Not Yet Supported
+- **Gemini Projects** (Gemini doesn't have projects yet)
 
 ## Features
 
@@ -44,16 +51,37 @@ A Chrome extension for exporting AI chat conversations to JSON and Markdown form
 4. Click "Export Chat"
 5. Files are saved directly to your browser's **default Downloads folder** (no prompt)
 
-### Project Export (ChatGPT Only)
+### Project Export (ChatGPT, Claude, Perplexity)
 
+#### ChatGPT Projects
 1. Navigate to ChatGPT and select a project from the sidebar
 2. **Important**: Scroll through the project to load all chats in the main pane
 3. Click the ChatVault Exporter extension icon
 4. Enter a **Project Name** in the text field (used in all filenames and folder names)
-5. Configure export options (same as single chat)
+5. Configure export options
 6. Click "Export Project"
 7. Wait for the export to complete (approximately 4–5 seconds per chat)
-8. All files are saved directly to your browser's **default Downloads folder** (no prompt)
+8. All files are saved directly to your browser's **default Downloads folder**
+
+#### Claude Projects
+1. Navigate to `claude.ai/projects` or open a specific Claude Project
+2. Wait for conversations to load in the main area
+3. Click the ChatVault Exporter extension icon
+4. Enter a **Project Name** in the text field
+5. Configure export options
+6. Click "Export Project"
+7. Wait for the export to complete
+8. All files are saved directly to your browser's **default Downloads folder**
+
+#### Perplexity Spaces
+1. Navigate to `perplexity.ai/spaces` or open a specific Perplexity Space
+2. Wait for threads to load
+3. Click the ChatVault Exporter extension icon
+4. Enter a **Space Name** in the text field
+5. Configure export options
+6. Click "Export Space"
+7. Wait for the export to complete
+8. All files are saved directly to your browser's **default Downloads folder**
 
 **Output Structure** (flat folder, optimized for Claude Projects):
 ```
@@ -100,8 +128,11 @@ ChatVault-export--<ProjectName>--<ChatName>--<YYYY-MM-DD>.<ext>
 
 - **"Content script not loaded"**: Refresh the page and try again
 - **"No conversation turns found"**: Make sure you're on a conversation page with visible messages
-- **Project export button disabled**: Select a project in ChatGPT and ensure chats are loaded in the main pane
-- **Missing chats in project export**: Scroll through the entire project to load all chats, then refresh the extension
+- **Project export button disabled**: 
+  - ChatGPT: Select a project and ensure chats are loaded in the main pane
+  - Claude: Open a project page (`claude.ai/project/...`) to see conversations
+  - Perplexity: Open a space page (`perplexity.ai/spaces/...`) to see threads
+- **Missing chats in project export**: Scroll through the entire project/space to load all items, then refresh the extension
 - **Export stalls**: The extension waits between chats to avoid rate limiting. This is normal.
 - **Can't find exported files**: Check your browser's default Downloads folder, or open `chrome://downloads` to see the exact save location
 
@@ -114,14 +145,16 @@ ChatVault-export--<ProjectName>--<ChatName>--<YYYY-MM-DD>.<ext>
 
 ## Version History
 
-0.6.10 - Version bump (documentation updates)
+**0.7.0** - Claude Projects and Perplexity Spaces support: export entire projects/spaces with all conversations/threads
 
-0.6.9 - Perplexity.ai support added
+0.6.10 - Single-chat exports download directly to Downloads folder (no Save As dialog)
 
-0.6.8 - Rebrand to ChatVault Exporter; CV icons; hover tooltip; project name in header
+0.6.9 - Perplexity.ai single-chat support
 
-0.6.7 - Single-chat exports download directly to Downloads folder (no Save As dialog), matching project export behavior
+0.6.8 - Rebrand to ChatVault Exporter
 
-0.6.6 - Reliable project export: wait for conversation DOM, retry failed chats (up to 3 attempts), show failed chat list in UI and index file
+0.6.7 - Documentation updates
 
-0.6.5 - Security hardening: path traversal protection, XSS prevention, API key env vars, clipboard restoration, improved error handling
+0.6.6 - Reliable project export: wait for conversation DOM, retry failed chats (up to 3 attempts)
+
+0.6.5 - Security hardening: path traversal protection, XSS prevention, improved error handling
