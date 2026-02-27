@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.7.3';
+const EXTENSION_VERSION = '0.7.4';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -2300,31 +2300,53 @@ function discoverClaudeChatsInCurrentProject() {
   const chats = [];
   const seenIds = new Set();
   
-  // Look for conversation links with data-dd-action-name="conversation-cell"
-  // or a[href^="/chat/"] in the main content area
-  const chatLinks = document.querySelectorAll('a[data-dd-action-name="conversation-cell"], a[href^="/chat/"]');
-  
-  for (const link of chatLinks) {
+  function addChat(link) {
     const href = link.getAttribute('href');
-    if (!href || !href.includes('/chat/')) continue;
-    
-    // Extract chat ID from URL: /chat/4d3f86ec-f839-4192-ad6b-4d099eb71a7e
+    if (!href || !href.includes('/chat/')) return;
     const match = href.match(/\/chat\/([a-f0-9-]+)/);
-    if (!match) continue;
-    
+    if (!match) return;
     const chatId = match[1];
-    if (seenIds.has(chatId)) continue;
+    if (seenIds.has(chatId)) return;
     seenIds.add(chatId);
-    
-    // Find title - look for .truncate.font-base or nested text
     const titleEl = link.querySelector('.truncate.font-base, .font-base, [class*="truncate"]');
     const title = titleEl?.textContent?.trim() || link.textContent?.trim()?.split('\n')[0] || `Chat ${chatId}`;
-    
     chats.push({
       id: chatId,
       title,
       url: href.startsWith('http') ? href : `https://claude.ai${href}`,
     });
+  }
+  
+  function isInsideLeftNav(link) {
+    for (const root of leftNavRoots) {
+      if (root.contains(link)) return true;
+    }
+    return false;
+  }
+  
+  const isProjectPage = /\/project\/[a-f0-9-]+/.test(window.location.href);
+  
+  // Find left nav containers (sidebar with recents)
+  const leftNavRoots = [
+    ...document.querySelectorAll('aside'),
+    ...document.querySelectorAll('nav'),
+    ...document.querySelectorAll('[class*="sidebar" i]'),
+    ...document.querySelectorAll('[data-testid*="sidebar" i]'),
+    ...document.querySelectorAll('[aria-label*="sidebar" i]'),
+  ].filter((el) => el && el.isConnected);
+  
+  if (isProjectPage) {
+    // Project is selected: only list chats in the main content. Exclude anything in left nav.
+    const allChatLinks = document.querySelectorAll('a[data-dd-action-name="conversation-cell"], a[href^="/chat/"]');
+    for (const link of allChatLinks) {
+      if (isInsideLeftNav(link)) continue;
+      addChat(link);
+    }
+  } else {
+    // No project selected: list chats from the left nav only.
+    for (const root of leftNavRoots) {
+      root.querySelectorAll('a[data-dd-action-name="conversation-cell"], a[href^="/chat/"]').forEach(addChat);
+    }
   }
   
   return { chats };

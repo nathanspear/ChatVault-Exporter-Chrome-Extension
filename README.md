@@ -1,6 +1,6 @@
 # ChatVault Exporter Extension
 
-**Version**: 0.7.3
+**Version**: 0.7.4
 
 A Chrome extension for exporting AI chat conversations to JSON and Markdown formats. Supports single-chat and full project/space exports, optimized for Claude Projects.
 
@@ -144,6 +144,8 @@ ChatVault-export--<ProjectName>--<ChatName>--<YYYY-MM-DD>.<ext>
 - Conversations never leave your device
 
 ## Version History
+
+**0.7.4** - Bugfix: Claude projects now show only chats in current project (not sidebar recents)
 
 **0.7.3** - Bugfix: Claude project pages now recognized, Perplexity shows only threads in current space (not sidebar)
 
