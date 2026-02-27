@@ -13,7 +13,7 @@
  * Collision variant (same name already used in this export run):
  *   ChatVault-export--{Platform}--{ProjectSlug}--{ChatSlug}--{shortChatId}--{YYYY-MM-DD}.{ext}
  *
- * Platform values: ChatGPT, Claude, Perplexity, Gemini, Grok
+ * Platform values: ChatGPT, Claude, Perplexity, Gemini
  */
 
 /**
@@ -53,7 +53,7 @@ function slugForExport(text) {
  * Build a deterministic export filename.
  *
  * @param {object}   opts
- * @param {string}   opts.platform     Platform name: 'chatgpt', 'claude', 'perplexity', 'gemini', 'grok'
+ * @param {string}   opts.platform     Platform name: 'chatgpt', 'claude', 'perplexity', 'gemini'
  * @param {string}   opts.projectName  Raw project name; falsy → "Unassigned"
  * @param {string}   opts.chatName     Raw chat title; falsy → "Untitled"
  * @param {string}   opts.ext          Extension without dot: "json", "md", "zip", etc.
@@ -102,7 +102,7 @@ function buildExportFilename(opts) {
  * Build the export folder name (no trailing slash).
  *
  * @param {object}  opts
- * @param {string}  opts.platform     Platform name: 'chatgpt', 'claude', 'perplexity', 'gemini', 'grok'
+ * @param {string}  opts.platform     Platform name: 'chatgpt', 'claude', 'perplexity', 'gemini'
  * @param {string}  opts.projectName  Raw project name; falsy → "Unassigned"
  * @param {string}  [opts.exportDate] ISO date or YYYY-MM-DD; defaults to today (UTC)
  * @returns {string} e.g. "ChatVault-export--ChatGPT--Job-Search--2026-02-21"

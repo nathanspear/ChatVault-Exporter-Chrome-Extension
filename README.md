@@ -11,7 +11,6 @@ A Chrome extension for exporting AI chat conversations to JSON and Markdown form
 - **Claude.ai**
 - **Google Gemini**
 - **Perplexity.ai**
-- **Grok** (grok.com, x.com/i/grok)
 
 ### Project/Space Export ✅
 - **ChatGPT Projects**
@@ -20,7 +19,6 @@ A Chrome extension for exporting AI chat conversations to JSON and Markdown form
 ### Not Supported
 - **Perplexity Spaces** (single-thread export works, but Space export disabled due to performance issues)
 - **Gemini Projects** (Gemini doesn't have projects yet)
-- **Grok Projects** (Grok doesn't have projects yet)
 
 ## Features
 
@@ -43,7 +41,7 @@ A Chrome extension for exporting AI chat conversations to JSON and Markdown form
 
 ### Single Chat Export
 
-1. Navigate to any supported AI chat conversation (ChatGPT, Claude, Gemini, Perplexity, Grok)
+1. Navigate to any supported AI chat conversation (ChatGPT, Claude, Gemini, Perplexity)
 2. Click the ChatVault Exporter extension icon
 3. Configure export options:
    - **Include Markdown** (default: on) — Exports conversation as readable Markdown
