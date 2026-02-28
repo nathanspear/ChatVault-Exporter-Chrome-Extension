@@ -39,50 +39,15 @@ A Chrome extension for exporting AI chat conversations to JSON and Markdown form
 
 ## Usage
 
-### Single Chat Export
+**Single chat** — works on all five supported platforms (ChatGPT, Claude.ai, Google Gemini, Perplexity.ai, and Grok): Open any conversation, click the ChatVault Exporter icon in your toolbar, choose your format (Markdown, JSON, or ZIP), and click Export Chat. The file saves to your Downloads folder.
 
-1. Navigate to any supported AI chat conversation (ChatGPT, Claude, Gemini, Perplexity)
-2. Click the ChatVault Exporter extension icon
-3. Configure export options:
-   - **Include Markdown** (default: on) — Exports conversation as readable Markdown
-   - **Include JSON** (default: off) — Exports raw conversation data as JSON
-   - **Create ZIP archive** (default: off) — Packages exports into a ZIP file
-4. Click "Export Chat"
-5. Files are saved directly to your browser's **default Downloads folder** (no prompt)
+**Full project export** — ChatGPT and Claude.ai only: Open a project, scroll down to load all chats in the sidebar, click the extension icon, type a project name in the field provided, and click Export Project. Allow about 4–5 seconds per chat. You'll get a flat folder (or ZIP) containing all chats plus a project index file.
 
-### Project Export (ChatGPT, Claude, Perplexity)
+### Using your exported files
 
-#### ChatGPT Projects
-1. Navigate to ChatGPT and select a project from the sidebar
-2. **Important**: Scroll through the project to load all chats in the main pane
-3. Click the ChatVault Exporter extension icon
-4. Enter a **Project Name** in the text field (used in all filenames and folder names)
-5. Configure export options
-6. Click "Export Project"
-7. Wait for the export to complete (approximately 4–5 seconds per chat)
-8. All files are saved directly to your browser's **default Downloads folder**
-
-#### Claude Projects
-1. Navigate to `claude.ai/projects` or open a specific Claude Project
-2. Wait for conversations to load in the main area
-3. Click the ChatVault Exporter extension icon
-4. Enter a **Project Name** in the text field
-5. Configure export options
-6. Click "Export Project"
-7. Wait for the export to complete
-8. All files are saved directly to your browser's **default Downloads folder**
-
-**Output Structure** (flat folder, optimized for Claude Projects):
-```
-ChatVault-export--<Platform>--<ProjectName>--<YYYY-MM-DD>/
-  00-project-index.md          # Table of contents with chat list
-  00-project-summary.md        # Summary template
-  ChatVault-export--<Platform>--<ProjectName>--<ChatName>--<YYYY-MM-DD>.md
-  ChatVault-export--<Platform>--<ProjectName>--<ChatName>--<YYYY-MM-DD>.json (if enabled)
-  manifest.json                # Metadata for automation
-```
-
-If "Create ZIP archive" is enabled, all files are packaged into a single ZIP file.
+- **Read or search locally:** Any .md file opens in a text editor or any Markdown viewer. The files are plain text and human-readable without any special tools.
+- **Add to a project:** Open or create a project in your AI tool of choice, and add your .md files to the project knowledge or files section. The AI can reference that content across all conversations in that project. You can also paste the contents of an .md file directly into a chat if you just need quick access to one conversation.
+- **JSON files:** If you exported JSON, those files contain the full structured conversation data and are useful if you want to import into another system later. For most users, Markdown is all you need.
 
 ### Using with ChatVault
 
