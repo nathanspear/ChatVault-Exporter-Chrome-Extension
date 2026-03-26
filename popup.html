@@ -172,6 +172,15 @@
     .btn-primary:hover:not(:disabled) { background: #333; }
     .btn-primary:active:not(:disabled) { background: #000; }
 
+    .btn-secondary {
+      background: #f3f4f6;
+      color: #1a1a1a;
+      border: 1px solid #ddd;
+      margin-top: 8px;
+    }
+    .btn-secondary:hover:not(:disabled) { background: #e8e9ed; }
+    .btn-secondary:active:not(:disabled) { background: #dfe0e4; }
+
     .results {
       margin-top: 12px;
       padding: 10px 12px;
@@ -333,6 +342,17 @@
 
     <button id="exportBtn" class="btn btn-primary" disabled>
       Export Chat
+    </button>
+
+    <button
+      type="button"
+      id="downloadChatFilesBtn"
+      class="btn btn-secondary"
+      style="display: none;"
+      disabled
+      title="Finds file and image links visible in this chat (ChatGPT web) and downloads them into a folder. blob: links cannot be captured from the page."
+    >
+      Download chat attachments
     </button>
 
     <div id="results" class="results"></div>

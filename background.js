@@ -52,6 +52,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'downloadFromUrl') {
+    handleDownloadFromUrl(message)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (message.action === 'getTabInfo') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
@@ -69,7 +76,179 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  if (message.action === 'chatgptMainWorldHarvest') {
+    const tabId = sender.tab?.id;
+    if (!tabId) {
+      sendResponse({ success: false, urls: [], error: 'No tab' });
+      return;
+    }
+    handleChatGPTMainWorldHarvest(tabId)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, urls: [], error: err.message }));
+    return true;
+  }
 });
+
+/**
+ * Runs IN THE PAGE (world: MAIN). ChatGPT keeps file URLs in React props, not on DOM attributes.
+ * Serialized and injected via chrome.scripting — must not close over background scope.
+ */
+function chatGPTMainWorldHarvestFunction() {
+  const urls = new Set();
+  const seenObj = new WeakSet();
+  let fiberSteps = 0;
+  const MAX_FIBER = 12000;
+  const MAX_ELEM = 10000;
+  const MAX_SCAN_OBJ = 2500;
+  let scanObjCount = 0;
+
+  function oaiLooksLikeChatAttachment(raw) {
+    try {
+      const url = new URL(raw.split(/["'\s<>]/)[0].replace(/\\u0026/g, '&'));
+      if (!url.hostname.toLowerCase().endsWith('.oaiusercontent.com')) return false;
+      const pathLower = url.pathname.toLowerCase();
+      const blob = pathLower + url.search.toLowerCase();
+      if (/avatar|favicon|emoji|\/icon|\/logo|badge|placeholder|webpack|\/static\/|\/assets\/|sprite|thumbnail/i.test(blob)) {
+        return false;
+      }
+      const w = parseInt(url.searchParams.get('w') || '0', 10);
+      const h = parseInt(url.searchParams.get('h') || '0', 10);
+      if (w > 0 && h > 0 && w <= 128 && h <= 128 && !url.searchParams.get('rscd')) return false;
+      if (url.searchParams.get('rscd')) return true;
+      if ((url.searchParams.get('id') || '').startsWith('file-')) return true;
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function addUrl(s) {
+    if (typeof s !== 'string' || s.length < 28 || s.length > 8192) return;
+    if (!s.startsWith('https://')) return;
+    const low = s.toLowerCase();
+    if (low.includes('oaiusercontent.com')) {
+      const cleaned = s.split(/["'\s<>]/)[0].replace(/\\u0026/g, '&');
+      if (!oaiLooksLikeChatAttachment(cleaned)) return;
+      urls.add(cleaned);
+      return;
+    }
+    if (
+      (low.includes('chatgpt.com') || low.includes('chat.openai.com')) &&
+      low.includes('backend-api') &&
+      (low.includes('estuary') || low.includes('id=file-') || low.includes('file-'))
+    ) {
+      urls.add(s.split(/["'\s<>]/)[0].replace(/\\u0026/g, '&'));
+    }
+  }
+
+  function scanValue(v, depth) {
+    if (depth > 16) return;
+    if (v === null || v === undefined) return;
+    if (typeof v === 'string') {
+      if (v.startsWith('https://')) addUrl(v);
+      else if (v.length > 48 && (v.includes('oaiusercontent') || v.includes('estuary') || v.includes('backend-api'))) {
+        const re =
+          /https:\/\/(?:[\w.-]+\.)?(?:chatgpt\.com|chat\.openai\.com|(?:[\w-]+\.)?oaiusercontent\.com)(?:\/[^\s"'<>\\]*)?/gi;
+        let m;
+        while ((m = re.exec(v)) !== null) addUrl(m[0]);
+      }
+      return;
+    }
+    if (typeof v !== 'object') return;
+    if (seenObj.has(v)) return;
+    if (scanObjCount >= MAX_SCAN_OBJ) return;
+    seenObj.add(v);
+    scanObjCount++;
+    if (Array.isArray(v)) {
+      for (let i = 0; i < Math.min(v.length, 80); i++) scanValue(v[i], depth + 1);
+      return;
+    }
+    let k = 0;
+    for (const key of Object.keys(v)) {
+      if (k++ > 120) break;
+      try {
+        scanValue(v[key], depth + 1);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+  }
+
+  function walkFiber(root) {
+    const resume = [];
+    let head = root;
+    while (head && fiberSteps < MAX_FIBER) {
+      fiberSteps++;
+      const p = head.memoizedProps || head.pendingProps;
+      if (p) scanValue(p, 0);
+      if (head.child) {
+        if (head.sibling) resume.push(head.sibling);
+        head = head.child;
+      } else if (head.sibling) {
+        head = head.sibling;
+      } else {
+        head = resume.pop() || null;
+      }
+    }
+  }
+
+  const main = document.querySelector('main') || document.body;
+  if (main) {
+    const all = main.querySelectorAll('*');
+    const n = Math.min(all.length, MAX_ELEM);
+    for (let i = 0; i < n; i++) {
+      const el = all[i];
+      const keys = Object.getOwnPropertyNames(el);
+      for (let j = 0; j < keys.length; j++) {
+        const key = keys[j];
+        if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
+          const fiber = el[key];
+          if (fiber && typeof fiber === 'object') walkFiber(fiber);
+          break;
+        }
+      }
+      for (let j = 0; j < keys.length; j++) {
+        const key = keys[j];
+        if (key.startsWith('__reactProps$')) {
+          try {
+            scanValue(el[key], 0);
+          } catch (e) {
+            /* ignore */
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  const nd = document.getElementById('__NEXT_DATA__');
+  if (nd && nd.textContent && nd.textContent.length < 2_000_000) {
+    try {
+      scanValue(JSON.parse(nd.textContent), 0);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  return Array.from(urls);
+}
+
+async function handleChatGPTMainWorldHarvest(tabId) {
+  try {
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: chatGPTMainWorldHarvestFunction,
+    });
+    const urls = injected[0]?.result;
+    if (!Array.isArray(urls)) return { success: true, urls: [] };
+    return { success: true, urls };
+  } catch (err) {
+    console.error('[ChatVault] MAIN-world file harvest failed:', err);
+    return { success: false, urls: [], error: err.message };
+  }
+}
 
 // Data URLs work even if the service worker is killed; blob URLs can become invalid.
 const DATA_URL_MAX_CHARS = 1500000; // ~1.5 MB
@@ -108,6 +287,159 @@ async function handleDownload({ content, filename, mimeType }) {
   }
 }
 
+/** Map Content-Type (no params) to a safe file extension. */
+function extensionFromMimeType(mime) {
+  if (!mime || typeof mime !== 'string') return '';
+  const m = mime.split(';')[0].trim().toLowerCase();
+  const map = {
+    'application/pdf': '.pdf',
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'image/svg+xml': '.svg',
+    'text/plain': '.txt',
+    'text/csv': '.csv',
+    'text/markdown': '.md',
+    'application/json': '.json',
+    'application/zip': '.zip',
+    'application/x-zip-compressed': '.zip',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'application/vnd.ms-excel': '.xls',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+    'application/vnd.ms-powerpoint': '.ppt',
+    'audio/mpeg': '.mp3',
+    'audio/mp4': '.m4a',
+    'video/mp4': '.mp4',
+  };
+  return map[m] || '';
+}
+
+function parseContentDispositionFilename(cd) {
+  if (!cd || typeof cd !== 'string') return null;
+  const star = cd.match(/filename\*\s*=\s*(?:UTF-8'')?([^;\n]+)/i);
+  if (star) {
+    let v = star[1].trim().replace(/^["']|["']$/g, '');
+    try {
+      v = decodeURIComponent(v);
+    } catch {
+      /* keep */
+    }
+    if (v) return v.split('/').pop();
+  }
+  const q = cd.match(/filename\s*=\s*"([^"]+)"/i);
+  if (q) return q[1].trim().split('/').pop();
+  const u = cd.match(/filename\s*=\s*([^;\n]+)/i);
+  if (u) return u[1].trim().replace(/^["']|["']$/g, '').split('/').pop();
+  return null;
+}
+
+function sanitizeAttachmentBasename(name) {
+  let s = String(name || 'download')
+    .replace(/[\/\\:*?"<>|\x00-\x1f]/g, '_')
+    .replace(/^\.+/, '')
+    .trim();
+  if (!s) s = 'download';
+  return s.slice(0, 180);
+}
+
+function suggestedBasenameNeedsServerHint(base) {
+  if (!base || typeof base !== 'string') return true;
+  const s = base.trim();
+  if (!s) return true;
+  if (/^(attachment|image|download)$/i.test(s)) return true;
+  if (!/\.[a-z0-9]{2,8}$/i.test(s)) return true;
+  if (/^file-[\w-]+$/i.test(s)) return true;
+  return false;
+}
+
+async function fetchWithHeadersForFilename(url) {
+  const tries = [
+    () => fetch(url, { method: 'HEAD', credentials: 'include', redirect: 'follow' }),
+    () =>
+      fetch(url, {
+        method: 'GET',
+        credentials: 'include',
+        redirect: 'follow',
+        headers: { Range: 'bytes=0-0' },
+      }),
+  ];
+  for (const run of tries) {
+    try {
+      const r = await run();
+      if (r.ok || r.status === 206) return r;
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+/**
+ * When the UI only gives file- IDs or "image", ask the server for Content-Disposition / Content-Type.
+ */
+async function resolveDownloadFilenameFromUrl(url, fullPath) {
+  const parts = fullPath.split('/').filter(Boolean);
+  const base = parts.length ? parts[parts.length - 1] : fullPath;
+  if (!suggestedBasenameNeedsServerHint(base)) return fullPath;
+
+  let r;
+  try {
+    r = await fetchWithHeadersForFilename(url);
+  } catch {
+    r = null;
+  }
+  if (!r) return fullPath;
+
+  let name = parseContentDispositionFilename(r.headers.get('content-disposition') || '');
+  const ct = (r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  try {
+    r.body?.cancel();
+  } catch {
+    /* ignore */
+  }
+
+  if (name) {
+    name = sanitizeAttachmentBasename(name);
+    if (name && !/\.[a-z0-9]{2,8}$/i.test(name) && ct) {
+      const ext = extensionFromMimeType(ct);
+      if (ext) name += ext;
+    }
+  } else if (ct) {
+    const ext = extensionFromMimeType(ct);
+    if (ext) name = sanitizeAttachmentBasename(`chatgpt-file${ext}`);
+    else name = sanitizeAttachmentBasename('chatgpt-file.bin');
+  }
+
+  if (!name) return fullPath;
+  if (parts.length <= 1) return name;
+  parts[parts.length - 1] = name;
+  return parts.join('/');
+}
+
+/** Download a remote URL into Downloads (uses the user’s cookies for that origin). */
+async function handleDownloadFromUrl({ url, filename }) {
+  try {
+    if (!url || typeof url !== 'string' || !/^https:/i.test(url)) {
+      return { success: false, error: 'Invalid download URL' };
+    }
+    const initial = filename && filename.trim() ? filename.trim() : 'attachment';
+    const resolved = await resolveDownloadFilenameFromUrl(url, initial);
+    const downloadId = await chrome.downloads.download({
+      url,
+      filename: resolved,
+      saveAs: false,
+    });
+    return { success: true, downloadId };
+  } catch (err) {
+    console.error('[ChatVault] handleDownloadFromUrl failed:', err);
+    return { success: false, error: err.message };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Project Export — flat folder layout
 // ---------------------------------------------------------------------------
@@ -122,7 +454,7 @@ async function handleDownload({ content, filename, mimeType }) {
 // ---------------------------------------------------------------------------
 
 // slugForExport and buildExportFilename are provided by filename-builder.js.
-const extensionVersion = '0.8.6';
+const extensionVersion = '0.9.3';
 
 async function handleProjectExport({ project, userProjectName, chats, tabId, platform, includeMarkdown = true, includeJson = false, createZip = false }) {
   const authorizedProjectName = (userProjectName || '').trim() || null;

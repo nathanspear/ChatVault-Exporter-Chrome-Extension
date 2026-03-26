@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.8.6';
+const EXTENSION_VERSION = '0.9.3';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -81,7 +81,8 @@ async function waitForConversationReady(options = {}) {
   }
 
   const selectors = {
-    chatgpt: 'article[data-testid^="conversation-turn-"]',
+    chatgpt:
+      'article[data-testid^="conversation-turn-"], [data-testid^="conversation-turn-"], [data-message-author-role="user"], [data-message-author-role="assistant"]',
     claude: '[data-testid="user-message"], .font-claude-message',
     gemini: 'user-query, model-response',
     grok: '[class*="message"], [data-testid*="message"]',
@@ -191,7 +192,12 @@ async function clickCopyAndRead(button) {
  * Scroll a container to load all lazy-loaded content.
  * Returns the number of scroll iterations performed.
  */
-async function scrollToLoadAll(scrollContainer, countSelector, startTime) {
+async function scrollToLoadAll(scrollContainer, countSource, startTime) {
+  const getCount =
+    typeof countSource === 'function'
+      ? countSource
+      : () => document.querySelectorAll(countSource).length;
+
   let previousCount = 0;
   let stableIterations = 0;
   let scrollIterations = 0;
@@ -208,8 +214,7 @@ async function scrollToLoadAll(scrollContainer, countSelector, startTime) {
   ) {
     if (startTime && Date.now() - startTime > SAFETY_LIMITS.MAX_EXTRACTION_TIME_MS) break;
 
-    const currentElements = document.querySelectorAll(countSelector);
-    const currentCount = currentElements.length;
+    const currentCount = getCount();
     console.log(`[Chat Archive] Scroll iteration ${scrollIterations}: found ${currentCount} elements (prev: ${previousCount}), stable: ${stableIterations}`);
     
     if (currentCount === previousCount) {
@@ -489,39 +494,71 @@ function findClaudeScrollContainer() {
 // Copy button: button[data-testid="copy-turn-action-button"] on both roles
 // Role signals: data-turn="user"|"assistant" on <article> (0.99)
 //               data-message-author-role="user"|"assistant" (0.99)
+//
+// Newer ChatGPT web builds often omit article[data-testid^="conversation-turn-"] and
+// expose flat [data-message-author-role] nodes instead — we support both.
+
+const CHATGPT_MESSAGE_ROOT_SEL =
+  '[data-message-author-role="user"], [data-message-author-role="assistant"]';
+
+function findChatGPTMessageRootElements() {
+  const candidates = document.querySelectorAll(CHATGPT_MESSAGE_ROOT_SEL);
+  const roots = [];
+  candidates.forEach((el) => {
+    const parentMsg = el.parentElement?.closest(CHATGPT_MESSAGE_ROOT_SEL);
+    if (parentMsg) return;
+    roots.push(el);
+  });
+  return roots;
+}
+
+/** Turn containers: legacy <article> turns, or any conversation-turn testid, or message-role roots. */
+function getChatGPTTurnContainerNodes() {
+  const articles = document.querySelectorAll('article[data-testid^="conversation-turn-"]');
+  if (articles.length > 0) return Array.from(articles);
+  const byTestid = document.querySelectorAll('[data-testid^="conversation-turn-"]');
+  if (byTestid.length > 0) return Array.from(byTestid);
+  const msgRoots = findChatGPTMessageRootElements();
+  if (msgRoots.length > 0) return msgRoots;
+  const looseArticles = Array.from(document.querySelectorAll('main article, [class*="react-scroll"] article')).filter(
+    (a) =>
+      a.querySelector(
+        '[data-message-author-role="user"], [data-message-author-role="assistant"], [data-message-content]'
+      )
+  );
+  return looseArticles;
+}
 
 async function extractChatGPTConversation() {
   const startTime = Date.now();
   const turns = [];
   const errors = [];
 
-  // 1. Find scroll container
   const scrollContainer = findChatGPTScrollContainer();
   if (!scrollContainer) {
     return { turns: [], errors: ['Scroll container not found'], partial: true };
   }
 
-  // 2. Load all turns
   await scrollToLoadAll(
     scrollContainer,
-    'article[data-testid^="conversation-turn-"]',
+    () => getChatGPTTurnContainerNodes().length,
     startTime
   );
 
-  // 3. Get all articles
-  const articles = document.querySelectorAll('article[data-testid^="conversation-turn-"]');
-  console.log(`[Chat Archive] ChatGPT: Found ${articles.length} turn articles`);
+  const finalContainers = getChatGPTTurnContainerNodes();
+  console.log(`[Chat Archive] ChatGPT: Found ${finalContainers.length} turn containers`);
 
-  if (articles.length === 0) {
-    return { turns: [], errors: ['No turn articles found'], partial: true };
+  if (finalContainers.length === 0) {
+    return {
+      turns: [],
+      errors: ['No conversation messages found (UI may have changed)'],
+      partial: true,
+    };
   }
 
-  // 4. Skip clipboard for ChatGPT: clicking Copy triggers "Failed to copy to clipboard" toasts
-  //    and can fail in extension context. Use direct text extraction only.
   const hasClipboard = false;
 
-  // 5. Extract each article
-  for (let i = 0; i < articles.length; i++) {
+  for (let i = 0; i < finalContainers.length; i++) {
     if (Date.now() - startTime > SAFETY_LIMITS.MAX_EXTRACTION_TIME_MS) {
       errors.push(`Extraction timed out after ${SAFETY_LIMITS.MAX_EXTRACTION_TIME_MS}ms`);
       break;
@@ -531,13 +568,13 @@ async function extractChatGPTConversation() {
       break;
     }
 
-    const article = articles[i];
+    const container = finalContainers[i];
 
     try {
-      article.scrollIntoView({ behavior: 'instant', block: 'center' });
+      container.scrollIntoView({ behavior: 'instant', block: 'center' });
       await wait(150);
 
-      const turn = await extractChatGPTTurn(article, hasClipboard);
+      const turn = await extractChatGPTTurn(container, hasClipboard, i + 1);
       if (turn) turns.push(flagIfOversized(turn));
     } catch (err) {
       errors.push(`Error extracting turn ${i}: ${err.message}`);
@@ -549,43 +586,42 @@ async function extractChatGPTConversation() {
   return { turns, errors, partial: errors.length > 0 };
 }
 
-async function extractChatGPTTurn(article, hasClipboard) {
-  // --- Role detection (multiple high-confidence signals) ---
-  let role = article.getAttribute('data-turn'); // 'user' or 'assistant'
+async function extractChatGPTTurn(container, hasClipboard, sequentialTurnNumber) {
+  let role = container.getAttribute('data-message-author-role');
+  if (!role) role = container.getAttribute('data-turn');
 
   if (!role) {
-    // Fallback: data-message-author-role
-    const msgDiv = article.querySelector('[data-message-author-role]');
+    const msgDiv = container.querySelector('[data-message-author-role]');
     role = msgDiv?.getAttribute('data-message-author-role');
   }
 
   if (!role) {
-    // Fallback: screen reader heading
-    const h5 = article.querySelector('h5.sr-only');
-    const h6 = article.querySelector('h6.sr-only');
+    const h5 = container.querySelector('h5.sr-only');
+    const h6 = container.querySelector('h6.sr-only');
     if (h5 && h5.textContent?.includes('You said')) role = 'user';
     else if (h6 && h6.textContent?.includes('ChatGPT said')) role = 'assistant';
   }
 
   if (role !== 'user' && role !== 'assistant') return null;
 
-  // --- Turn metadata ---
-  const testId = article.getAttribute('data-testid') || '';
-  const turnNumber = parseInt(testId.replace('conversation-turn-', '')) || 0;
-  const turnId = article.getAttribute('data-turn-id') || '';
-  const msgDiv = article.querySelector('[data-message-author-role]');
+  const testId = container.getAttribute('data-testid') || '';
+  let turnNumber = parseInt(testId.replace('conversation-turn-', ''), 10) || 0;
+  if (!turnNumber && sequentialTurnNumber) turnNumber = sequentialTurnNumber;
+
+  const turnId = container.getAttribute('data-turn-id') || '';
+  const msgDiv = container.matches?.('[data-message-author-role]')
+    ? container
+    : container.querySelector('[data-message-author-role]');
   const modelSlug = msgDiv?.getAttribute('data-message-model-slug') || undefined;
 
-  // --- Pass 0: Clipboard extraction ---
   let content = null;
   let extractionMethod = 'direct';
 
   if (hasClipboard) {
     try {
-      const copyBtn = article.querySelector('button[data-testid="copy-turn-action-button"]');
+      const copyBtn = container.querySelector('button[data-testid="copy-turn-action-button"]');
       if (!copyBtn) {
-        // Fuzzy fallback
-        const fallback = findActionButton(article, ['Copy']);
+        const fallback = findActionButton(container, ['Copy']);
         if (fallback) {
           const clipContent = await clickCopyAndRead(fallback);
           if (clipContent && clipContent.trim().length > 0) {
@@ -605,9 +641,8 @@ async function extractChatGPTTurn(article, hasClipboard) {
     }
   }
 
-  // --- Fallback: Direct text ---
   if (!content) {
-    content = extractChatGPTDirectText(article, role);
+    content = extractChatGPTDirectText(container, role);
     extractionMethod = 'direct';
   }
 
@@ -620,37 +655,47 @@ async function extractChatGPTTurn(article, hasClipboard) {
     turnId,
     modelSlug,
     extractionMethod,
-    confidence: 0.99, // data-turn attribute is extremely reliable
+    confidence: 0.99,
     classificationSource: 'structural',
   };
 }
 
-function extractChatGPTDirectText(article, role) {
-  if (role === 'user') {
-    const el = article.querySelector('.whitespace-pre-wrap');
-    return el?.textContent?.trim() || '';
-  } else {
-    // Try .markdown.prose first, then broader selectors
-    const markdown = article.querySelector('.markdown.prose');
-    if (markdown) return markdown.textContent?.trim() || '';
-
-    const markdownNew = article.querySelector('.markdown');
-    if (markdownNew) return markdownNew.textContent?.trim() || '';
-
-    // Last resort: grab all text from the message div
-    const msgDiv = article.querySelector('[data-message-author-role="assistant"]');
-    return msgDiv?.textContent?.trim() || '';
+function extractChatGPTDirectText(container, role) {
+  const msgContent = container.querySelector('[data-message-content]');
+  if (msgContent) {
+    const t = msgContent.textContent?.trim();
+    if (t) return t;
   }
+
+  if (role === 'user') {
+    const el = container.querySelector('.whitespace-pre-wrap');
+    if (el?.textContent?.trim()) return el.textContent.trim();
+  }
+
+  const markdown = container.querySelector('.markdown.prose') || container.querySelector('.markdown');
+  if (markdown?.textContent?.trim()) return markdown.textContent.trim();
+
+  const roleDiv = container.querySelector(`[data-message-author-role="${role}"]`);
+  if (roleDiv?.textContent?.trim()) return roleDiv.textContent.trim();
+
+  return container.textContent?.trim() || '';
 }
 
 function findChatGPTScrollContainer() {
+  const firstTurn = document.querySelector(
+    'article[data-testid^="conversation-turn-"], [data-testid^="conversation-turn-"], [data-message-author-role="user"], [data-message-author-role="assistant"]'
+  );
+
   const strategies = [
     () => document.querySelector('[data-scroll-root]'),
-    () => {
-      const firstArticle = document.querySelector('article[data-testid^="conversation-turn-"]');
-      return firstArticle ? findScrollableAncestor(firstArticle) : null;
-    },
+    () => (firstTurn ? findScrollableAncestor(firstTurn) : null),
     () => document.querySelector('main [class*="overflow-y-auto"]'),
+    () => {
+      const main = document.querySelector('main');
+      if (!main) return null;
+      const last = main.querySelector('[data-message-author-role], article');
+      return last ? findScrollableAncestor(last) : findScrollableAncestor(main);
+    },
   ];
 
   for (const strategy of strategies) {
@@ -658,6 +703,522 @@ function findChatGPTScrollContainer() {
     if (result) return result;
   }
   return null;
+}
+
+// -----------------------------------------------------------------------------
+// ChatGPT — Attachments (uploads + assistant file links) for download
+// -----------------------------------------------------------------------------
+// Collects same-origin / OpenAI CDN URLs visible in the conversation DOM after
+// full scroll. blob: links are skipped (not readable from the content script).
+// -----------------------------------------------------------------------------
+
+/**
+ * *.oaiusercontent.com hosts both real chat uploads AND UI (avatars, icons, thumbnails).
+ * Only treat as a downloadable attachment when the URL looks like a file payload, not chrome.
+ */
+function isOaiUserContentChatAttachmentUrl(u) {
+  const pathLower = u.pathname.toLowerCase();
+  const searchLower = (u.search || '').toLowerCase();
+  const blob = pathLower + searchLower;
+  if (/avatar|favicon|emoji|\/icon|\/logo|badge|placeholder|webpack|\/static\/|\/assets\/|sprite|thumbnail/i.test(blob)) {
+    return false;
+  }
+  const w = parseInt(u.searchParams.get('w') || '0', 10);
+  const h = parseInt(u.searchParams.get('h') || '0', 10);
+  if (w > 0 && h > 0 && w <= 128 && h <= 128 && !u.searchParams.get('rscd')) {
+    return false;
+  }
+  if (u.searchParams.get('rscd')) return true;
+  const idq = u.searchParams.get('id') || '';
+  if (idq.startsWith('file-')) return true;
+  return false;
+}
+
+function isLikelyChatGPTFileUrl(absUrl, options) {
+  const opts = options || {};
+  let u;
+  try {
+    u = new URL(absUrl);
+  } catch {
+    return false;
+  }
+  if (u.protocol === 'blob:') return true;
+  if (u.protocol !== 'https:') return false;
+  const host = u.hostname.toLowerCase();
+  const onChat =
+    host === 'chatgpt.com' ||
+    host === 'www.chatgpt.com' ||
+    host === 'chat.openai.com';
+  const onOpenAIAsset = host.endsWith('.oaiusercontent.com');
+  if (!onChat && !onOpenAIAsset) return false;
+
+  const path = u.pathname;
+  const pathLower = path.toLowerCase();
+
+  if (onChat) {
+    if (/^\/c\/[^/]+\/?$/.test(path)) return false;
+    if (pathLower.startsWith('/g/')) return false;
+    if (pathLower.includes('/auth/') || pathLower.includes('/accounts/')) return false;
+  }
+
+  if (onOpenAIAsset) {
+    if (isOaiUserContentChatAttachmentUrl(u)) return true;
+    if (opts.allowLooseOaiImage && opts.element) {
+      const inUser = opts.element.closest('[data-message-author-role="user"]');
+      if (inUser && /\.(png|jpe?g|gif|webp|svg|heic)(\?|#|$)/i.test(path)) return true;
+    }
+    return false;
+  }
+
+  if (/\.(pdf|zip|csv|tsv|xlsx?|xls|docx?|doc|pptx?|ppt|txt|json|xml|png|jpe?g|gif|webp|svg|heic|mp3|mp4|wav|mov|webm|opus)(\?|#|$)/i.test(path)) {
+    return true;
+  }
+
+  if (onChat && pathLower.includes('/backend-api/')) {
+    if (pathLower.includes('/estuary/')) return true;
+    const idParam = u.searchParams.get('id') || '';
+    if (idParam.startsWith('file-')) return true;
+  }
+
+  return false;
+}
+
+function inferChatGPTAttachmentContext(el) {
+  let role = 'unknown';
+  let turnNumber = 0;
+  const msg = el.closest('[data-message-author-role="user"], [data-message-author-role="assistant"]');
+  if (msg) {
+    role = msg.getAttribute('data-message-author-role') || 'unknown';
+  }
+  const turnEl = el.closest('[data-testid^="conversation-turn-"]');
+  if (turnEl) {
+    const tid = turnEl.getAttribute('data-testid') || '';
+    const n = parseInt(tid.replace('conversation-turn-', ''), 10);
+    if (n) turnNumber = n;
+    const dt = turnEl.getAttribute('data-turn');
+    if (dt === 'user' || dt === 'assistant') role = dt;
+  }
+  return { role, turnNumber };
+}
+
+function parseSrcsetFirstUrl(srcset) {
+  if (!srcset || typeof srcset !== 'string') return null;
+  const part = srcset.split(',')[0]?.trim().split(/\s+/)[0];
+  return part || null;
+}
+
+/** Depth-first walk including open shadow roots (ChatGPT may hide file UI inside components). */
+function walkDeepElementTree(root, callback) {
+  if (!root) return;
+  function visit(node) {
+    if (!node) return;
+    if (node.nodeType === 1) {
+      callback(node);
+      if (node.shadowRoot) visit(node.shadowRoot);
+      const kids = node.children;
+      if (kids) {
+        for (let i = 0; i < kids.length; i++) visit(kids[i]);
+      }
+    }
+  }
+  visit(root);
+}
+
+/** Pull ChatGPT / OpenAI CDN URLs out of long serialized props (React, etc.). */
+function extractHttpsUrlsFromString(str) {
+  if (!str || str.length < 28) return [];
+  const out = [];
+  const re =
+    /https:\/\/(?:[\w.-]+\.)?(?:chatgpt\.com|chat\.openai\.com|(?:[\w-]+\.)?oaiusercontent\.com)(?:\/[^\s"'<>\\]*)?/gi;
+  let m;
+  while ((m = re.exec(str)) !== null) {
+    let url = m[0].replace(/\\u0026/g, '&').replace(/&quot;?$/i, '');
+    if (url.endsWith('\\')) url = url.slice(0, -1);
+    if (url.endsWith(')') || url.endsWith(']') || url.endsWith('"')) url = url.slice(0, -1);
+    out.push(url);
+  }
+  return out;
+}
+
+function createChatGPTAttachmentTryPush(files, seen, skippedBlobRef) {
+  return function tryPush(absUrl, filename, el, kind) {
+    if (!absUrl || absUrl.startsWith('blob:')) {
+      if (absUrl && absUrl.startsWith('blob:')) skippedBlobRef.n++;
+      return;
+    }
+    const urlOpts =
+      kind === 'image' && el ? { allowLooseOaiImage: true, element: el } : {};
+    if (!isLikelyChatGPTFileUrl(absUrl, urlOpts)) return;
+    if (seen.has(absUrl)) return;
+    seen.add(absUrl);
+    const ctx = el ? inferChatGPTAttachmentContext(el) : { role: 'unknown', turnNumber: 0 };
+    files.push({
+      url: absUrl,
+      filename: filename || guessChatGPTAttachmentFilename(null, absUrl),
+      role: ctx.role,
+      turnNumber: ctx.turnNumber,
+      kind,
+    });
+  };
+}
+
+/**
+ * Collect file URLs: walk entire tree + shadow DOM; parse embedded URLs in attributes.
+ * Skips left sidebar (aside) to reduce junk. ChatGPT header attachments often sit
+ * outside the scroll region or only appear in serialized data attributes.
+ */
+function gatherChatGPTAttachmentUrlsDeep(scopeRoot, files, seen, skippedBlobRef) {
+  if (!scopeRoot) return;
+  const tryPush = createChatGPTAttachmentTryPush(files, seen, skippedBlobRef);
+
+  walkDeepElementTree(scopeRoot, (node) => {
+    if (node.tagName === 'SCRIPT' || node.tagName === 'STYLE' || node.tagName === 'NOSCRIPT') return;
+    if (node.closest && node.closest('aside')) return;
+
+    if (node.tagName === 'A') {
+      const href = (node.getAttribute('href') || '').trim();
+      if (href && href !== '#' && !href.startsWith('javascript:')) {
+        try {
+          const abs = new URL(href, window.location.origin).href;
+          tryPush(abs, guessChatGPTAttachmentFilename(node, abs), node, 'link');
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    if (node.tagName === 'IMG') {
+      const src = (node.getAttribute('src') || '').trim();
+      if (src && !src.startsWith('data:')) {
+        try {
+          const abs = new URL(src, window.location.origin).href;
+          tryPush(abs, guessFilenameFromImageUrl(abs), node, 'image');
+        } catch {
+          /* ignore */
+        }
+      }
+      const ss = parseSrcsetFirstUrl(node.getAttribute('srcset'));
+      if (ss && !ss.startsWith('data:')) {
+        try {
+          const abs = new URL(ss, window.location.origin).href;
+          tryPush(abs, guessFilenameFromImageUrl(abs), node, 'image');
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    const attrs = node.attributes;
+    if (!attrs || attrs.length === 0) return;
+    for (let i = 0; i < attrs.length; i++) {
+      const attr = attrs[i];
+      const v = (attr.value || '').trim();
+      if (v.length < 24) continue;
+
+      if (/^https:\/\//i.test(v) && !/[\s<>"']/.test(v)) {
+        try {
+          const abs = new URL(v).href;
+          if (isLikelyChatGPTFileUrl(abs)) tryPush(abs, guessChatGPTAttachmentFilename(null, abs), node, 'data-attr');
+        } catch {
+          /* ignore */
+        }
+      }
+
+      if (v.length > 36 && (v.includes('oaiusercontent') || v.includes('backend-api') || v.includes('estuary'))) {
+        extractHttpsUrlsFromString(v).forEach((u) => {
+          tryPush(u, guessChatGPTAttachmentFilename(null, u), node, 'embedded');
+        });
+      }
+    }
+  });
+}
+
+/**
+ * No plain URLs in DOM — trigger ChatGPT’s own download behavior (same as clicking the chip).
+ */
+async function clickChatGPTNativeAttachmentDownloads() {
+  const clicked = [];
+  const seen = new WeakSet();
+
+  function maybeClick(el) {
+    if (!el || seen.has(el)) return;
+    seen.add(el);
+    clicked.push(el);
+  }
+
+  function maybeClickFileChip(el) {
+    if (!el || seen.has(el) || el.closest?.('aside')) return;
+    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (txt.length < 4 || txt.length > 100) return;
+    if (!/\.(pdf|docx?|xlsx?|xls|csv|txt|png|jpe?g|gif|webp|svg|zip|json|md|pptx?|rtf|heic)\b/i.test(txt)) return;
+    if (/^(send|search|voice|regenerate|copy|good|bad|continue|skip)/i.test(txt)) return;
+    if (el.closest('[data-radix-popper-content-wrapper]')) return;
+    maybeClick(el);
+  }
+
+  const firstUser = document.querySelector('[data-message-author-role="user"]');
+  if (firstUser) {
+    firstUser.querySelectorAll('[role="button"], button, a').forEach(maybeClickFileChip);
+  }
+
+  const mainForSticky = document.querySelector('main');
+  if (mainForSticky) {
+    mainForSticky.querySelectorAll('[class*="sticky" i]').forEach((root) => {
+      root.querySelectorAll('[role="button"], a, button').forEach(maybeClickFileChip);
+    });
+  }
+
+  walkDeepElementTree(document.body, (node) => {
+    if (node.tagName !== 'A' || node.closest?.('aside')) return;
+    const href = (node.href || node.getAttribute('href') || '').trim();
+    if (!href.startsWith('https://')) return;
+    if (!isLikelyChatGPTFileUrl(href)) return;
+    maybeClick(node);
+  });
+
+  const main = document.querySelector('main');
+  if (main) {
+    main.querySelectorAll('button[aria-label], [role="button"][aria-label]').forEach((el) => {
+      if (el.closest('aside')) return;
+      const lab = (el.getAttribute('aria-label') || '').toLowerCase();
+      if (
+        lab.includes('download') ||
+        lab.includes('save file') ||
+        (lab.includes('file') && lab.includes('open'))
+      ) {
+        maybeClick(el);
+      }
+    });
+
+    main.querySelectorAll('a[download], a[href*="estuary"], a[href*="oaiusercontent"]').forEach((el) => {
+      if (!el.closest('aside')) maybeClick(el);
+    });
+
+    main.querySelectorAll('[role="button"], button, a').forEach((el) => {
+      if (el.closest('aside')) return;
+      const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (txt.length < 4 || txt.length > 100) return;
+      if (!/\.(pdf|docx?|xlsx?|xls|csv|txt|png|jpe?g|gif|webp|svg|zip|json|md|pptx?|rtf|heic)\b/i.test(txt)) return;
+      if (/^(send|search|voice|regenerate|copy|good|bad|continue)/i.test(txt)) return;
+      if (el.closest('textarea') || el.closest('[data-radix-popper-content-wrapper]')) return;
+      maybeClick(el);
+    });
+  }
+
+  let n = 0;
+  for (const el of clicked) {
+    try {
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
+      await wait(80);
+      const view = el.ownerDocument?.defaultView;
+      if (view && typeof view.MouseEvent === 'function') {
+        const opts = { bubbles: true, cancelable: true, view };
+        el.dispatchEvent(new view.MouseEvent('pointerdown', opts));
+        el.dispatchEvent(new view.MouseEvent('pointerup', opts));
+        el.dispatchEvent(new view.MouseEvent('click', opts));
+      }
+      if (typeof el.click === 'function') el.click();
+      n++;
+    } catch (err) {
+      console.warn('[ChatVault] attachment click failed:', err);
+    }
+    await wait(500);
+  }
+  return n;
+}
+
+function mimeStringToFileExtension(mimeRaw) {
+  if (!mimeRaw || typeof mimeRaw !== 'string') return '';
+  const m = decodeURIComponent(mimeRaw).split(';')[0].trim().toLowerCase();
+  const map = {
+    'application/pdf': '.pdf',
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'image/svg+xml': '.svg',
+    'text/plain': '.txt',
+    'text/csv': '.csv',
+    'text/markdown': '.md',
+    'application/json': '.json',
+    'application/zip': '.zip',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+  };
+  return map[m] || '';
+}
+
+function parseFilenameFromRscdParam(rscd) {
+  if (!rscd || typeof rscd !== 'string') return null;
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(rscd.replace(/\+/g, ' '));
+    } catch {
+      return rscd;
+    }
+  })();
+  let m = decoded.match(/filename\*\s*=\s*UTF-8''([^;\n]+)/i);
+  if (m) {
+    try {
+      return decodeURIComponent(m[1].trim().replace(/^["']|["']$/g, ''));
+    } catch {
+      return m[1].trim();
+    }
+  }
+  m = decoded.match(/filename\s*=\s*"([^"]+)"/i) || decoded.match(/filename\s*=\s*([^;\n]+)/i);
+  if (m) return m[1].trim().replace(/^["']|["']$/g, '');
+  return null;
+}
+
+function guessChatGPTAttachmentFilename(anchor, absUrl) {
+  const dl = anchor && anchor.getAttribute('download');
+  if (dl && dl.trim()) return dl.trim().split('/').pop();
+
+  const label = anchor && (anchor.getAttribute('aria-label') || anchor.getAttribute('title'));
+  if (label && /\.[a-z0-9]{2,5}$/i.test(label.trim())) return label.trim().split(/\s+/)[0];
+
+  const text = anchor && anchor.textContent ? anchor.textContent.trim() : '';
+  if (text && text.length < 200 && /\.[a-z0-9]{2,5}$/i.test(text)) return text.split(/\s+/)[0];
+
+  try {
+    const u = new URL(absUrl);
+    const fp = u.searchParams.get('filename') || u.searchParams.get('name');
+    if (fp) return fp.split('/').pop();
+
+    const rscd = u.searchParams.get('rscd');
+    if (rscd) {
+      const fromRscd = parseFilenameFromRscdParam(rscd);
+      if (fromRscd) return fromRscd.split('/').pop();
+    }
+
+    const last = decodeURIComponent(u.pathname.split('/').pop() || '');
+    if (last && last !== 'download' && last.includes('.')) return last;
+
+    const fid = u.searchParams.get('id');
+    const rsct = u.searchParams.get('rsct');
+    if (fid && fid.startsWith('file-') && rsct) {
+      const ext = mimeStringToFileExtension(rsct);
+      if (ext) return `${fid}${ext}`;
+    }
+    if (fid && fid.startsWith('file-')) return fid;
+
+    const rsp = u.searchParams.get('response-content-disposition');
+    if (rsp) {
+      const fromRsp = parseFilenameFromRscdParam(rsp);
+      if (fromRsp) return fromRsp.split('/').pop();
+    }
+  } catch {
+    /* ignore */
+  }
+  return 'download';
+}
+
+function guessFilenameFromImageUrl(absUrl) {
+  const g = guessChatGPTAttachmentFilename(null, absUrl);
+  if (g && g !== 'download' && g !== 'attachment') return g;
+  try {
+    const u = new URL(absUrl);
+    const last = decodeURIComponent(u.pathname.split('/').pop() || '');
+    if (last && /\.[a-z0-9]{2,8}$/i.test(last)) return last;
+  } catch {
+    /* ignore */
+  }
+  return 'download';
+}
+
+async function collectChatGPTAttachments() {
+  const startTime = Date.now();
+  const scrollContainer = findChatGPTScrollContainer();
+  if (!scrollContainer) {
+    return { success: false, error: 'Could not find chat scroll area', files: [] };
+  }
+
+  await scrollToLoadAll(
+    scrollContainer,
+    () => getChatGPTTurnContainerNodes().length,
+    startTime
+  );
+
+  const seen = new Set();
+  const files = [];
+  const skippedBlobRef = { n: 0 };
+
+  gatherChatGPTAttachmentUrlsDeep(document.body, files, seen, skippedBlobRef);
+
+  let mainWorldRawCount = 0;
+  let mainWorldError = null;
+  if (files.length === 0) {
+    try {
+      const mw = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'chatgptMainWorldHarvest' }, (r) => {
+          if (chrome.runtime.lastError) {
+            resolve({ success: false, urls: [], error: chrome.runtime.lastError.message });
+          } else {
+            resolve(r || {});
+          }
+        });
+      });
+      mainWorldError = mw.error || null;
+      if (mw.success && Array.isArray(mw.urls) && mw.urls.length > 0) {
+        mainWorldRawCount = mw.urls.length;
+        const tryPush = createChatGPTAttachmentTryPush(files, seen, skippedBlobRef);
+        for (const u of mw.urls) {
+          if (typeof u === 'string') {
+            tryPush(u, guessChatGPTAttachmentFilename(null, u), null, 'react-props');
+          }
+        }
+      }
+    } catch (err) {
+      mainWorldError = err.message;
+      console.warn('[ChatVault] MAIN-world harvest error:', err);
+    }
+  }
+
+  let usedUiClickFallback = false;
+  let uiClickCount = 0;
+  if (files.length === 0) {
+    usedUiClickFallback = true;
+    uiClickCount = await clickChatGPTNativeAttachmentDownloads();
+  }
+
+  let skippedBlob = skippedBlobRef.n;
+
+  let chatTitle = '';
+  let chatId = '';
+  const currentChatId = window.location.pathname.match(/\/c\/([^/?]+)/)?.[1];
+  if (currentChatId) chatId = currentChatId;
+  const fromTitle = document.title?.replace(/\s*[-|]\s*ChatGPT.*$/i, '').trim();
+  if (fromTitle) chatTitle = fromTitle;
+
+  const warnings = [];
+  if (skippedBlob > 0) {
+    warnings.push(
+      `${skippedBlob} blob: link(s) skipped — use ChatGPT’s UI to save those files if needed.`
+    );
+  }
+  if (files.some((f) => f.kind === 'react-props')) {
+    warnings.push('Some file URLs were read from ChatGPT’s in-page React state (not visible as normal HTML links).');
+  }
+  if (usedUiClickFallback && uiClickCount > 0) {
+    warnings.push(
+      `Used ChatGPT’s on-page controls for ${uiClickCount} item(s) (no direct file URLs were found in the DOM).`
+    );
+  }
+
+  return {
+    success: true,
+    files,
+    usedUiClickFallback,
+    uiClickCount,
+    mainWorldRawCount,
+    mainWorldError,
+    chatTitle,
+    chatId,
+    skippedBlob,
+    warnings,
+  };
 }
 
 
@@ -2637,6 +3198,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ project: null });
     }
     return;
+  }
+
+  if (message.action === 'listChatGPTAttachments') {
+    if (detectPlatform() !== 'chatgpt') {
+      sendResponse({ success: false, error: 'Chat attachments download is only available on ChatGPT.', files: [] });
+      return;
+    }
+    collectChatGPTAttachments()
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, error: err.message, files: [] }));
+    return true;
   }
 });
 

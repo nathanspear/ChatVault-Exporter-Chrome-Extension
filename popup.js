@@ -1,5 +1,5 @@
 // =============================================================================
-// ChatVault — Popup Script  v0.8.6
+// ChatVault — Popup Script  v0.9.3
 // =============================================================================
 // Manages the extension popup UI: platform detection, single-chat export,
 // and project-batch export for ChatGPT.
@@ -30,6 +30,7 @@
 
 const statusEl = document.getElementById('status');
 const exportBtn = document.getElementById('exportBtn');
+const downloadChatFilesBtn = document.getElementById('downloadChatFilesBtn');
 const resultsEl = document.getElementById('results');
 const exportProjectBtn = document.getElementById('exportProjectBtn');
 const projectInfoEl = document.getElementById('projectInfo');
@@ -230,6 +231,14 @@ async function init() {
         const conversationPage = isOnConversationPage(url, detectedPlatform);
         if (conversationPage) {
           exportBtn.disabled = false;
+          if (downloadChatFilesBtn) {
+            if (detectedPlatform === 'chatgpt') {
+              downloadChatFilesBtn.style.display = 'block';
+              downloadChatFilesBtn.disabled = false;
+            } else {
+              downloadChatFilesBtn.style.display = 'none';
+            }
+          }
           showStatus(
             'info',
             `Detected: <span class="platform-name">${name}</span>. Ready to export.`
@@ -237,6 +246,10 @@ async function init() {
         } else {
           exportBtn.disabled = true;
           exportBtn.textContent = 'No chat open';
+          if (downloadChatFilesBtn) {
+            downloadChatFilesBtn.style.display = 'none';
+            downloadChatFilesBtn.disabled = true;
+          }
           showStatus(
             'info',
             `Detected: <span class="platform-name">${name}</span>. Open a chat to export it, or use the Project Export section below.`
@@ -323,6 +336,134 @@ exportBtn.addEventListener('click', async () => {
   exportBtn.disabled = false;
   exportBtn.textContent = getExportChatButtonLabel();
 });
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
+function sanitizeAttachmentFilename(name) {
+  let s = String(name || 'file')
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+    .replace(/^\.+/, '')
+    .trim();
+  if (!s) s = 'file';
+  return s.slice(0, 180);
+}
+
+function pickUniqueFilename(desired, usedSet) {
+  if (!usedSet.has(desired)) return desired;
+  const m = desired.match(/^(.+)(\.[^.]+)$/);
+  const stem = m ? m[1] : desired;
+  const ext = m ? m[2] : '';
+  let n = 2;
+  let candidate;
+  do {
+    candidate = `${stem} (${n})${ext}`;
+    n += 1;
+  } while (usedSet.has(candidate));
+  return candidate;
+}
+
+if (downloadChatFilesBtn) {
+  downloadChatFilesBtn.addEventListener('click', async () => {
+    if (!currentTabId || detectedPlatform !== 'chatgpt') return;
+
+    downloadChatFilesBtn.disabled = true;
+    const prevLabel = downloadChatFilesBtn.textContent;
+    downloadChatFilesBtn.textContent = 'Scanning chat…';
+    showStatus('info', 'Loading the full conversation and scanning for file links…');
+
+    try {
+      const list = await sendToTab(currentTabId, { action: 'listChatGPTAttachments' });
+
+      if (!list || !list.success) {
+        showStatus('error', list?.error || 'Could not scan this chat.');
+        return;
+      }
+
+      if (list.warnings && list.warnings.length) {
+        console.warn('[ChatVault] Attachment scan warnings:', list.warnings);
+      }
+
+      if (!list.files || list.files.length === 0) {
+        if (list.usedUiClickFallback && list.uiClickCount > 0) {
+          showStatus(
+            'success',
+            `Triggered <strong>${list.uiClickCount}</strong> download(s) using ChatGPT’s own file controls (same as clicking each attachment). Check your Downloads folder.`
+          );
+          return;
+        }
+        const errHint = list.mainWorldError ? ` Details: ${escapeHtml(String(list.mainWorldError))}` : '';
+        showStatus(
+          'warning',
+          'Could not download attachments automatically. ChatGPT may store files in a closed UI layer, or the tab needs a refresh. Try: reload this chat tab, open the extension from that tab, and press again. If it still fails, use ChatGPT’s file chips or Library to download.' +
+            errHint
+        );
+        return;
+      }
+
+      const raw = await getProjectNameFromStorage();
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const pSlug = slugForExport(raw.trim()) || 'Unassigned';
+      const chatSlug = slugForExport(list.chatTitle || list.chatId || 'chat') || 'Chat';
+      const folder = `ChatVault-files--${pSlug}--${chatSlug}--${dateStr}`;
+
+      downloadChatFilesBtn.textContent = `Downloading 0 / ${list.files.length}…`;
+      const usedNames = new Set();
+      let ok = 0;
+      let failed = 0;
+
+      for (let i = 0; i < list.files.length; i++) {
+        const f = list.files[i];
+        const baseName = sanitizeAttachmentFilename(f.filename);
+        const unique = pickUniqueFilename(baseName, usedNames);
+        usedNames.add(unique);
+        const filename = `${folder}/${unique}`;
+
+        downloadChatFilesBtn.textContent = `Downloading ${i + 1} / ${list.files.length}…`;
+
+        try {
+          const res = await sendRuntimeMessage({
+            action: 'downloadFromUrl',
+            url: f.url,
+            filename,
+          });
+          if (res && res.success) ok += 1;
+          else failed += 1;
+        } catch {
+          failed += 1;
+        }
+        await sleep(350);
+      }
+
+      let msg = `Started <strong>${ok}</strong> download(s) into folder <code style="font-size:11px">${escapeHtml(folder)}</code>.`;
+      if (failed > 0) {
+        msg += ` <span style="color:#c53030">${failed} failed</span> (check that you are signed in to ChatGPT).`;
+      }
+      if (list.skippedBlob > 0) {
+        msg += ` ${list.skippedBlob} blob link(s) skipped — save those from the chat UI if needed.`;
+      }
+      showStatus(ok > 0 ? 'success' : 'warning', msg);
+    } catch (err) {
+      showStatus('error', `Attachment download failed: ${escapeHtml(err.message)}`);
+    } finally {
+      downloadChatFilesBtn.disabled = false;
+      downloadChatFilesBtn.textContent = prevLabel;
+    }
+  });
+}
 
 // --- UI Helpers ---
 function showStatus(type, html) {
