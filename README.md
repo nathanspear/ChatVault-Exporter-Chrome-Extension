@@ -1,6 +1,6 @@
 # ChatVault Exporter Extension
 
-**Version**: 0.8.3
+**Version**: 0.8.6
 
 A Chrome extension for exporting AI chat conversations to JSON and Markdown formats. Supports single-chat and full project/space exports, optimized for Claude Projects.
 
@@ -98,6 +98,9 @@ ChatVault-export--<ProjectName>--<ChatName>--<YYYY-MM-DD>.<ext>
 
 ## Version History
 
+**0.8.6** - Feature: Live batch-export progress in the popup (processed / total, left to go, exported vs failed, last chat title).
+**0.8.5** - Fix: "Export Chat" button now disabled on home/Recents pages (prevents "No conversation turns found" error). Recents chat list now always loads on Claude/ChatGPT home pages.
+**0.8.4** - Feature: Auto-scroll Recents list before discovery to expose all lazy-loaded chats. Added "Export all", "Refresh list" button, and improved hint text for individual-chat (Recents) mode.
 **0.8.3** - Removed: Perplexity Spaces support (too slow/unreliable). Single-thread export still works.
 
 **0.8.2** - Debug: Added logging for Perplexity scroll diagnostics

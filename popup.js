@@ -1,5 +1,5 @@
 // =============================================================================
-// ChatVault — Popup Script  v0.6.6
+// ChatVault — Popup Script  v0.8.6
 // =============================================================================
 // Manages the extension popup UI: platform detection, single-chat export,
 // and project-batch export for ChatGPT.
@@ -39,6 +39,9 @@ const chatListSection = document.getElementById('chatListSection');
 const chatListEl = document.getElementById('chatList');
 const selectAllBtn = document.getElementById('selectAllBtn');
 const selectNoneBtn = document.getElementById('selectNoneBtn');
+const refreshListBtn = document.getElementById('refreshListBtn');
+const exportAllBtn = document.getElementById('exportAllBtn');
+const chatListHint = document.getElementById('chatListHint');
 const projectNameInput = document.getElementById('projectNameInput');
 const projectNameWarning = document.getElementById('projectNameWarning');
 const filenamePreview = document.getElementById('filenamePreview');
@@ -176,6 +179,17 @@ projectNameInput.addEventListener('input', () => {
   updateFilenamePreview();
 });
 
+/**
+ * Returns true if the current URL is an actual conversation page (not a home/Recents page).
+ * Used to decide whether the single-chat Export button should be enabled.
+ */
+function isOnConversationPage(url, platform) {
+  if (platform === 'claude') return /\/chat\/[a-f0-9-]+/.test(url);
+  if (platform === 'chatgpt') return /\/c\/[a-zA-Z0-9_-]+/.test(url);
+  // Gemini, Grok, Perplexity — always on a conversation when the platform is detected
+  return true;
+}
+
 // --- Initialization ---
 async function init() {
   await loadSettings();
@@ -211,25 +225,31 @@ async function init() {
       if (response && response.supported) {
         detectedPlatform = response.platform;
         const name = PLATFORM_DISPLAY[detectedPlatform] || detectedPlatform;
-        showStatus(
-          'info',
-          `Detected: <span class="platform-name">${name}</span>. Ready to export.`
-        );
-        exportBtn.disabled = false;
 
-        // Load project/space info for platforms that support it
-        // Only load if we're actually on a project/space page to avoid interfering with single-chat export
-        // Note: Perplexity Spaces removed due to extraction performance issues
+        // Fix 1: only enable single-chat export when on an actual conversation page
+        const conversationPage = isOnConversationPage(url, detectedPlatform);
+        if (conversationPage) {
+          exportBtn.disabled = false;
+          showStatus(
+            'info',
+            `Detected: <span class="platform-name">${name}</span>. Ready to export.`
+          );
+        } else {
+          exportBtn.disabled = true;
+          exportBtn.textContent = 'No chat open';
+          showStatus(
+            'info',
+            `Detected: <span class="platform-name">${name}</span>. Open a chat to export it, or use the Project Export section below.`
+          );
+        }
+
+        // Fix 2: always load project/Recents info for Claude and ChatGPT
+        // (previously only ran on project pages — now also runs on home/Recents)
         if (detectedPlatform === 'chatgpt' || detectedPlatform === 'claude') {
           try {
-            const projectResponse = await sendToTab(currentTabId, { action: 'getCurrentProject' });
-            // Only call loadProjectInfo if we're actually on a project/space page
-            if (projectResponse?.project) {
-              await loadProjectInfo();
-            }
+            await loadProjectInfo();
           } catch (err) {
-            // If project detection fails, that's ok - user is probably on a single chat page
-            console.log('Not on a project/space page, skipping project info load');
+            console.log('Could not load project/Recents info:', err);
           }
         }
       } else {
@@ -357,6 +377,49 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+/** Live progress for batch export (messages from background.js handleProjectExport). */
+chrome.runtime.onMessage.addListener((message) => {
+  if (!message || message.action !== 'exportProgress') return;
+
+  const {
+    phase,
+    total,
+    completed,
+    remaining,
+    successSoFar,
+    failedSoFar,
+    lastTitle,
+    lastSucceeded,
+  } = message;
+
+  if (phase === 'start') {
+    showStatus(
+      'info',
+      `Starting export of <strong>${total}</strong> chat${total !== 1 ? 's' : ''}… Keep this popup open.`
+    );
+    return;
+  }
+
+  if (phase === 'chatDone') {
+    const remLabel = remaining > 0 ? `<strong>${remaining}</strong> left to go` : 'queue finished';
+    const last = lastTitle ? escapeHtml(String(lastTitle)) : '—';
+    const mark = lastSucceeded ? '✓' : '✗';
+    showStatus(
+      'info',
+      `<div style="line-height:1.45"><strong>${completed}</strong> / <strong>${total}</strong> chats processed · ${remLabel}</div>` +
+        `<div style="font-size:12px;margin-top:6px"><strong>${successSoFar}</strong> exported ok` +
+        (failedSoFar ? ` · <span style="color:#c0392b">${failedSoFar} failed</span>` : '') +
+        `</div>` +
+        `<div style="font-size:11px;color:#666;margin-top:4px">Last ${mark}: ${last}</div>`
+    );
+    return;
+  }
+
+  if (phase === 'finalizing') {
+    showStatus('info', 'Saving index and files to Downloads…');
+  }
+});
+
 function sendToTab(tabId, message) {
   return new Promise((resolve, reject) => {
     chrome.tabs.sendMessage(tabId, message, (response) => {
@@ -452,6 +515,24 @@ async function loadProjectInfo() {
       projectCountEl.textContent = chats.length === 0 ? `No ${itemLabel}s in left nav` : `${chats.length} ${itemLabel}${chats.length !== 1 ? 's' : ''} (left nav)`;
     }
 
+    const isIndividual = currentProject.id === 'individual';
+
+    // Show Refresh list button and update hint for individual (Recents) mode
+    if (isIndividual) {
+      refreshListBtn.style.display = '';
+      const itemLabel = detectedPlatform === 'perplexity' ? 'thread' : 'chat';
+      chatListHint.textContent = `Scroll to the bottom of the Recents list to expose all ${itemLabel}s, then click Refresh list. If still incomplete, reload the page and reopen the extension.`;
+    } else {
+      refreshListBtn.style.display = 'none';
+      chatListHint.textContent = 'Scroll down in the project so all chats are visible on the page. If the list is incomplete, refresh the page and reopen the extension.';
+    }
+
+    // Show/hide Export all button (individual mode only, when chats exist)
+    exportAllBtn.style.display = (isIndividual && chats.length > 0) ? '' : 'none';
+    if (isIndividual && chats.length > 0) {
+      exportAllBtn.textContent = `Export all (${chats.length})`;
+    }
+
     projectInfoEl.style.display = 'block';
     if (chats.length === 0) {
       chatListSection.style.display = 'none';
@@ -492,6 +573,23 @@ selectAllBtn.addEventListener('click', () => {
 selectNoneBtn.addEventListener('click', () => {
   chatListEl.querySelectorAll('input[type="checkbox"]').forEach((cb) => { cb.checked = false; });
   updateExportSelectedState();
+});
+
+refreshListBtn.addEventListener('click', async () => {
+  refreshListBtn.textContent = 'Refreshing...';
+  refreshListBtn.disabled = true;
+  try {
+    await loadProjectInfo();
+  } finally {
+    refreshListBtn.textContent = 'Refresh list';
+    refreshListBtn.disabled = false;
+  }
+});
+
+exportAllBtn.addEventListener('click', () => {
+  chatListEl.querySelectorAll('input[type="checkbox"]').forEach((cb) => { cb.checked = true; });
+  updateExportSelectedState();
+  exportProjectBtn.click();
 });
 
 exportProjectBtn.addEventListener('click', async () => {

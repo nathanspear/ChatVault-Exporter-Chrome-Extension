@@ -74,6 +74,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Data URLs work even if the service worker is killed; blob URLs can become invalid.
 const DATA_URL_MAX_CHARS = 1500000; // ~1.5 MB
 
+/** Notify extension pages (e.g. open popup) of batch-export progress. Safe if nothing is listening. */
+function broadcastExportProgress(payload) {
+  try {
+    chrome.runtime.sendMessage({ action: 'exportProgress', ...payload }).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
 // handleDownload is used for single-chat exports.
 // Uses saveAs: false to download directly to browser's Downloads folder (no dialog),
 // matching project export behavior.
@@ -113,7 +122,7 @@ async function handleDownload({ content, filename, mimeType }) {
 // ---------------------------------------------------------------------------
 
 // slugForExport and buildExportFilename are provided by filename-builder.js.
-const extensionVersion = '0.8.3';
+const extensionVersion = '0.8.6';
 
 async function handleProjectExport({ project, userProjectName, chats, tabId, platform, includeMarkdown = true, includeJson = false, createZip = false }) {
   const authorizedProjectName = (userProjectName || '').trim() || null;
@@ -136,6 +145,15 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
   const MAX_ATTEMPTS = 3;
   const RETRY_DELAY_MS = 3000;
   const WAIT_AFTER_NAV_MS = 1000;
+
+  broadcastExportProgress({
+    phase: 'start',
+    total: chats.length,
+    completed: 0,
+    remaining: chats.length,
+    successSoFar: 0,
+    failedSoFar: 0,
+  });
 
   for (let i = 0; i < chats.length; i++) {
     const chat = chats[i];
@@ -254,7 +272,27 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
       });
       console.error(`[ChatVault] Chat "${chat.title}" failed after ${MAX_ATTEMPTS} attempts: ${lastError}`);
     }
+
+    broadcastExportProgress({
+      phase: 'chatDone',
+      total: chats.length,
+      completed: i + 1,
+      remaining: chats.length - (i + 1),
+      successSoFar: successCount,
+      failedSoFar: failedChats.length,
+      lastTitle: chat.title || '',
+      lastSucceeded: chatSucceeded,
+    });
   }
+
+  broadcastExportProgress({
+    phase: 'finalizing',
+    total: chats.length,
+    completed: chats.length,
+    remaining: 0,
+    successSoFar: successCount,
+    failedSoFar: failedChats.length,
+  });
 
   // Helper: send message to tab with promise wrapper
   async function sendMessageToTab(tid, message) {

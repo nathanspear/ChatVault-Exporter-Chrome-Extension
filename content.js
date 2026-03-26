@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.8.3';
+const EXTENSION_VERSION = '0.8.6';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -2171,7 +2171,7 @@ function discoverChatGPTProjects() {
   return { projects };
 }
 
-function discoverChatGPTChatsInCurrentProject() {
+async function discoverChatGPTChatsInCurrentProject() {
   const chats = [];
   const seenIds = new Set();
 
@@ -2232,7 +2232,8 @@ function discoverChatGPTChatsInCurrentProject() {
       addChat(link);
     }
   } else {
-    // No project selected: list chats from the left nav only (all sidebar/aside/nav containers).
+    // No project selected: scroll Recents list to load all lazy-rendered chat links, then discover.
+    await scrollRecentsListToLoadAll('a[href*="/c/"]');
     for (const root of leftNavRoots) {
       root.querySelectorAll('a[href*="/c/"]').forEach(addChat);
     }
@@ -2252,6 +2253,111 @@ function getCurrentChatGPTProject() {
   const gMatch = url.match(/\/g\/([^\/]+)\/project/);
   if (gMatch) return { id: gMatch[1], name: null };
   return null;
+}
+
+// ============================================================================
+// Recents List Scroll Helper
+// ============================================================================
+
+/**
+ * Scroll the Recents sidebar list to the bottom so all lazy-loaded chat links
+ * are rendered in the DOM before discovery runs.
+ *
+ * Strategy: find the scrollable container inside the left nav that holds chat
+ * links, then scroll it downward in steps (same pattern as scrollToLoadAll)
+ * until the chat-link count stabilises across 3 consecutive iterations.
+ *
+ * @param {string} chatLinkSelector  CSS selector that matches chat links in the sidebar
+ * @returns {Promise<number>}  Number of scroll iterations performed
+ */
+async function scrollRecentsListToLoadAll(chatLinkSelector) {
+  // Find the scrollable sidebar container that holds the Recents list.
+  // We walk up from the first matching chat link to find its scrollable ancestor
+  // that lives inside a left-nav root (aside / nav / sidebar).
+  const leftNavRoots = [
+    ...document.querySelectorAll('aside'),
+    ...document.querySelectorAll('nav'),
+    ...document.querySelectorAll('[class*="sidebar" i]'),
+    ...document.querySelectorAll('[data-testid*="sidebar" i]'),
+    ...document.querySelectorAll('[data-testid*="side-bar" i]'),
+    ...document.querySelectorAll('[aria-label*="sidebar" i]'),
+  ].filter((el) => el && el.isConnected);
+
+  // Find the first chat link that lives inside a left-nav root
+  let scrollContainer = null;
+  const allLinks = document.querySelectorAll(chatLinkSelector);
+  for (const link of allLinks) {
+    for (const root of leftNavRoots) {
+      if (root.contains(link)) {
+        // Walk up from the link to find the scrollable ancestor within this root
+        const candidate = findScrollableAncestor(link);
+        if (candidate && root.contains(candidate)) {
+          scrollContainer = candidate;
+        }
+        break;
+      }
+    }
+    if (scrollContainer) break;
+  }
+
+  // Fallback: try the left-nav roots themselves for overflow-y
+  if (!scrollContainer) {
+    for (const root of leftNavRoots) {
+      const style = window.getComputedStyle(root);
+      if (style.overflowY === 'scroll' || style.overflowY === 'auto') {
+        scrollContainer = root;
+        break;
+      }
+      // Check direct children
+      for (const child of root.children) {
+        const cs = window.getComputedStyle(child);
+        if (cs.overflowY === 'scroll' || cs.overflowY === 'auto') {
+          scrollContainer = child;
+          break;
+        }
+      }
+      if (scrollContainer) break;
+    }
+  }
+
+  if (!scrollContainer) {
+    console.log('[ChatVault] scrollRecentsListToLoadAll: no scrollable container found, skipping');
+    return 0;
+  }
+
+  console.log('[ChatVault] scrollRecentsListToLoadAll: scrolling', scrollContainer.tagName, scrollContainer.className);
+
+  const startTime = Date.now();
+  let previousCount = 0;
+  let stableIterations = 0;
+  let scrollIterations = 0;
+
+  // Start from the top so we don't miss anything
+  scrollContainer.scrollTop = 0;
+  await wait(300);
+
+  while (
+    stableIterations < SAFETY_LIMITS.SCROLL_STABILITY_THRESHOLD &&
+    scrollIterations < SAFETY_LIMITS.MAX_SCROLL_ITERATIONS
+  ) {
+    if (Date.now() - startTime > 30_000) break; // 30 s safety cap
+
+    const currentCount = scrollContainer.querySelectorAll(chatLinkSelector).length;
+    if (currentCount === previousCount) {
+      stableIterations++;
+    } else {
+      stableIterations = 0;
+      previousCount = currentCount;
+    }
+
+    scrollContainer.scrollBy(0, scrollContainer.clientHeight * 0.8);
+    await wait(SAFETY_LIMITS.SCROLL_STEP_DELAY_MS);
+    scrollIterations++;
+  }
+
+  // Leave scroll position at bottom so newly rendered links stay in DOM
+  console.log(`[ChatVault] scrollRecentsListToLoadAll: ${previousCount} links after ${scrollIterations} scrolls`);
+  return scrollIterations;
 }
 
 // ============================================================================
@@ -2289,7 +2395,7 @@ function discoverClaudeProjects() {
   return { projects };
 }
 
-function discoverClaudeChatsInCurrentProject() {
+async function discoverClaudeChatsInCurrentProject() {
   const chats = [];
   const seenIds = new Set();
   
@@ -2336,7 +2442,8 @@ function discoverClaudeChatsInCurrentProject() {
       addChat(link);
     }
   } else {
-    // No project selected: list chats from the left nav only.
+    // No project selected: scroll Recents list to load all lazy-rendered chat links, then discover.
+    await scrollRecentsListToLoadAll('a[data-dd-action-name="conversation-cell"], a[href^="/chat/"]');
     for (const root of leftNavRoots) {
       root.querySelectorAll('a[data-dd-action-name="conversation-cell"], a[href^="/chat/"]').forEach(addChat);
     }
@@ -2503,14 +2610,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'discoverChats') {
     const platform = detectPlatform();
     if (platform === 'chatgpt') {
-      sendResponse(discoverChatGPTChatsInCurrentProject());
+      discoverChatGPTChatsInCurrentProject()
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ chats: [], error: err.message }));
     } else if (platform === 'claude') {
-      sendResponse(discoverClaudeChatsInCurrentProject());
+      discoverClaudeChatsInCurrentProject()
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ chats: [], error: err.message }));
     } else {
       // Perplexity Spaces not supported (extraction too slow/unreliable)
       sendResponse({ error: 'Platform does not support projects/spaces', chats: [] });
     }
-    return;
+    return true; // async response
   }
 
   if (message.action === 'getCurrentProject') {

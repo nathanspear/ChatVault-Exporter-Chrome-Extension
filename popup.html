@@ -368,15 +368,20 @@
     </div>
 
     <div id="chatListSection" style="display: none;">
-      <div class="chat-list-hint">
+      <div id="chatListHint" class="chat-list-hint">
         Scroll down in the project so all chats are visible on the page. If the list is incomplete, refresh the page and reopen the extension.
       </div>
       <div class="chat-list-actions">
         <button type="button" id="selectAllBtn" class="btn-link">Select all</button>
         <button type="button" id="selectNoneBtn" class="btn-link">Select none</button>
+        <button type="button" id="refreshListBtn" class="btn-link" style="display: none;">Refresh list</button>
       </div>
       <div id="chatList" class="chat-list"></div>
     </div>
+
+    <button id="exportAllBtn" class="btn btn-primary" style="display: none; margin-bottom: 8px;">
+      Export all
+    </button>
 
     <button id="exportProjectBtn" class="btn btn-primary" disabled>
       Export selected
