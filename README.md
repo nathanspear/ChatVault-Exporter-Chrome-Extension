@@ -1,134 +1,148 @@
-# ChatVault Exporter Extension
+# ChatVault Exporter — Chrome extension
 
-**Version**: 0.8.6
+**Version:** 0.9.3 (see `manifest.json`)
 
-A Chrome extension for exporting AI chat conversations to JSON and Markdown formats. Supports single-chat and full project/space exports, optimized for Claude Projects.
+Export AI chat conversations to **Markdown** and/or **JSON** from the browser. Supports single-chat export on several platforms and **project batch export** on ChatGPT and Claude. On **ChatGPT**, you can also download **file attachments** from the open conversation.
 
-## Supported Platforms
+Full project documentation (CLI, archive formats, ingest): [repository root README](../README.md).
 
-### Single-Chat Export ✅
-- **ChatGPT** (chat.openai.com, chatgpt.com)
-- **Claude.ai**
-- **Google Gemini**
-- **Perplexity.ai**
+**Standalone repo:** This folder is mirrored as its own GitHub repo for extension-only users:  
+[github.com/nathanspear/ChatVault-Exporter-Chrome-Extension](https://github.com/nathanspear/ChatVault-Exporter-Chrome-Extension)
 
-### Project/Space Export ✅
-- **ChatGPT Projects**
-- **Claude Projects**
+---
 
-### Not Supported
-- **Perplexity Spaces** (single-thread export works, but Space export disabled due to performance issues)
-- **Gemini Projects** (Gemini doesn't have projects yet)
+## Supported platforms
+
+### Single-chat export
+
+| Platform | Export chat | Download attachments |
+|----------|-------------|------------------------|
+| **ChatGPT** (`chatgpt.com`, `chat.openai.com`) | Yes | Yes (this chat only) |
+| **Claude.ai** | Yes | No |
+| **Google Gemini** | Yes | No |
+| **Perplexity** | Yes | No |
+| **Grok** (`grok.com`, `x.com/i/grok`) | Yes | No |
+
+### Project / batch export
+
+- **ChatGPT Projects** — select chats, export to a flat folder (+ optional ZIP).
+- **Claude Projects** — same pattern for Claude project pages.
+
+**Not supported:** Perplexity Spaces batch export (disabled for reliability). Gemini has no project export in this extension.
+
+---
 
 ## Features
 
-- **Single Chat Export**: Export the current chat as Markdown, JSON, or both
-- **Project Export (ChatGPT)**: Export an entire ChatGPT project as a flat folder structure
-- **Claude-Optimized**: Flat folder structure with index and summary files, perfect for Claude Projects
-- **Flexible Formats**: Toggle Markdown, JSON, and ZIP archive options independently
-- **User-Controlled Project Names**: Manual project name input for consistent, predictable filenames
-- **ChatVault Compatible**: Project exports are formatted for direct import into ChatVault Exporter
-- **Privacy First**: Zero network requests, zero telemetry — all processing happens locally in your browser
+- **Single chat** — Markdown, JSON, or both; optional project name for filenames.
+- **Project export** — ChatGPT/Claude: batch export with `00-project-index.md`, `manifest.json`, optional ZIP.
+- **ChatGPT attachments** — **Download chat attachments** button (on a `/c/...` chat): discovers file URLs (DOM + shadow roots + in-page React props when needed), filters out common UI CDN noise, resolves filenames/extensions (URL hints + `Content-Disposition` / `Content-Type` via `HEAD`/`Range` requests in the background worker), falls back to clicking native file controls when URLs are not exposed.
+- **Privacy-first** — No telemetry. Extraction runs in your browser; downloads use your normal browser session cookies for the same origins you are already logged into.
+
+---
+
+## Permissions (Manifest V3)
+
+| Permission | Why |
+|------------|-----|
+| `activeTab` | Interact with the current tab when you use the popup. |
+| `downloads` | Save exports and attachment files to your Downloads folder. |
+| `scripting` | Run a **page-context** script on ChatGPT to read file URLs held in React (not visible in plain HTML). Used only for attachment discovery when you click **Download chat attachments**. |
+| `storage` | Remember your project name and export toggles. |
+| `clipboardRead` | Optional copy-based extraction on some sites (where enabled). |
+| `tabs` | Project export navigates between chat URLs. |
+| `notifications` | Optional completion notices for batch export. |
+
+**Host permissions** include `chatgpt.com`, `chat.openai.com`, `*.oaiusercontent.com` (ChatGPT file CDN), and other supported chat hosts. Attachment downloads and filename resolution issue **HTTPS requests only to those origins** (same as the open tab).
+
+---
 
 ## Installation
 
-1. Open Chrome and navigate to `chrome://extensions/`
-2. Enable "Developer mode" (toggle in top right)
-3. Click "Load unpacked"
-4. Select the `chrome-extension/` folder from this repository
+1. Open Chrome → `chrome://extensions/`
+2. Turn on **Developer mode**
+3. **Load unpacked** → select this **`chrome-extension`** folder (or the repo root if you cloned [ChatVault-Exporter-Chrome-Extension](https://github.com/nathanspear/ChatVault-Exporter-Chrome-Extension) alone).
+
+---
 
 ## Usage
 
-**Single chat** — works on all five supported platforms (ChatGPT, Claude.ai, Google Gemini, Perplexity.ai, and Grok): Open any conversation, click the ChatVault Exporter icon in your toolbar, choose your format (Markdown, JSON, or ZIP), and click Export Chat. The file saves to your Downloads folder.
+### Export the conversation
 
-**Full project export** — ChatGPT and Claude.ai only: Open a project, scroll down to load all chats in the sidebar, click the extension icon, type a project name in the field provided, and click Export Project. Allow about 4–5 seconds per chat. You'll get a flat folder (or ZIP) containing all chats plus a project index file.
+1. Open a conversation on a supported site.
+2. Click the **ChatVault Exporter** icon.
+3. Choose **Include Markdown** / **Include JSON** (and project name for filenames).
+4. Click **Export Chat**.
 
-### Using your exported files
+### Export a project (ChatGPT or Claude)
 
-- **Read or search locally:** Any .md file opens in a text editor or any Markdown viewer. The files are plain text and human-readable without any special tools.
-- **Add to a project:** Open or create a project in your AI tool of choice, and add your .md files to the project knowledge or files section. The AI can reference that content across all conversations in that project. You can also paste the contents of an .md file directly into a chat if you just need quick access to one conversation.
-- **JSON files:** If you exported JSON, those files contain the full structured conversation data and are useful if you want to import into another system later. For most users, Markdown is all you need.
+1. Open the project and load the chat list (scroll if needed).
+2. Open the extension, set **Project name**, select chats, export.
 
-### Using with ChatVault
+### Download ChatGPT attachments (files in this chat)
 
-After exporting (single chat or project):
+1. Stay on the conversation page (`…/c/<chat-id>`).
+2. Open the extension → **Download chat attachments**.
+3. Files go under `Downloads/ChatVault-files--<ProjectSlug>--<ChatSlug>--YYYY-MM-DD/`.
 
-1. If you created a ZIP, extract it first
-2. Run ChatVault ingest:
-   ```bash
-   chatvault ingest --source extension-export --path /path/to/ChatVault-export--ProjectName--YYYY-MM-DD
-   ```
-3. Export to your desired format:
-   ```bash
-   chatvault export --format archive --out ./archive
-   chatvault export --format claude-project --out ./claude
-   chatvault export --format html --out ./viewer
-   ```
+If nothing is found, refresh the tab, ensure file chips are visible, and try again. Pure `blob:` URLs cannot be read by extensions; use ChatGPT’s UI for those.
 
-## Filename Format
+### Using exports with the ChatVault CLI
 
-All exported files follow this strict naming convention:
+After exporting a project folder:
 
-```
-ChatVault-export--<ProjectName>--<ChatName>--<YYYY-MM-DD>.<ext>
+```bash
+chatvault ingest --source extension-export --path ./ChatVault-export--ProjectName--YYYY-MM-DD
+chatvault export --format archive --out ./archive
 ```
 
-- **ProjectName**: User-supplied from the extension UI (defaults to "Unassigned" if blank)
-- **ChatName**: Extracted from the conversation title
-- **Date**: Export date (not chat creation date)
-- **Separators**: Exactly two hyphens (`--`)
+See [EXTENSION_INTEGRATION.md](../EXTENSION_INTEGRATION.md) in the repo.
+
+---
+
+## Filename patterns
+
+**Chat export:**
+
+`ChatVault-export--<Platform>--<ProjectSlug>--<ChatSlug>--YYYY-MM-DD.md` (and `.json` if enabled)
+
+**Attachment folder:**
+
+`ChatVault-files--<ProjectSlug>--<ChatSlug>--YYYY-MM-DD/<filename>`
+
+Project slug defaults to **Unassigned** if the field is blank.
+
+---
 
 ## Troubleshooting
 
-- **"Content script not loaded"**: Refresh the page and try again
-- **"No conversation turns found"**: Make sure you're on a conversation page with visible messages
-- **Project export button disabled**:
-  - ChatGPT: Select a project and ensure chats are loaded in the main pane
-  - Claude: Open a project page (`claude.ai/project/...`) to see conversations
-- **Missing chats in project export**: Scroll through the entire project to load all items, then refresh the extension
-- **Export stalls**: The extension waits between chats to avoid rate limiting. This is normal.
-- **Can't find exported files**: Check your browser's default Downloads folder, or open `chrome://downloads` to see the exact save location
+| Issue | What to try |
+|-------|-------------|
+| **Content script not loaded** | Refresh the page; ensure the site URL is allowed. |
+| **No conversation turns found** | Be on an actual chat URL with messages visible; hard-refresh. |
+| **Export Chat disabled** | Open a conversation (not only home/Recents). |
+| **Attachments: nothing downloaded** | Reload the chat tab; open the extension from that tab; ensure files appear in the UI. |
+| **Attachments: wrong/extra files** | Update to the latest extension; older builds could pick up UI CDN assets. Current builds filter `oaiusercontent.com` links to real attachment signals. |
+| **Project export incomplete** | Scroll the sidebar to load all chats before exporting. |
+
+---
 
 ## Privacy
 
-- All extraction happens locally in your browser
-- No data is sent to external servers
-- No analytics or telemetry
-- Conversations never leave your device
+- Conversation text extraction runs locally in the page.
+- No third-party analytics or telemetry.
+- Attachment handling uses **your browser’s cookies** for `chatgpt.com` / OpenAI CDNs only, same as normal downloads.
 
-## Version History
+---
 
-**0.8.6** - Feature: Live batch-export progress in the popup (processed / total, left to go, exported vs failed, last chat title).
-**0.8.5** - Fix: "Export Chat" button now disabled on home/Recents pages (prevents "No conversation turns found" error). Recents chat list now always loads on Claude/ChatGPT home pages.
-**0.8.4** - Feature: Auto-scroll Recents list before discovery to expose all lazy-loaded chats. Added "Export all", "Refresh list" button, and improved hint text for individual-chat (Recents) mode.
-**0.8.3** - Removed: Perplexity Spaces support (too slow/unreliable). Single-thread export still works.
+## Version history (recent)
 
-**0.8.2** - Debug: Added logging for Perplexity scroll diagnostics
+| Version | Notes |
+|---------|--------|
+| **0.9.3** | Stricter `oaiusercontent.com` filtering (fewer UI false positives); docs aligned. |
+| **0.9.2** | Server-assisted filenames (`Content-Disposition`, MIME) for attachments. |
+| **0.9.1** | MAIN-world React harvest + `scripting` permission for attachment URLs. |
+| **0.9.0** | Deep DOM/shadow scan; click fallback; embedded URL extraction. |
+| **0.8.x** | ChatGPT turn extraction fallbacks (`data-message-author-role`); attachment MVP. |
 
-**0.8.1** - Bugfix: Perplexity extraction now scrolls to load all content (fixed regression)
-
-**0.8.0** - Feature: Platform name now included in all filenames (e.g., `ChatVault-export--ChatGPT--ProjectName--ChatName--Date.md`)
-
-**0.7.5** - Bugfix: Perplexity Space export optimized to avoid 30s timeout (skip clipboard, longer waits)
-
-**0.7.4** - Bugfix: Claude projects now show only chats in current project (not sidebar recents)
-
-**0.7.3** - Bugfix: Claude project pages now recognized, Perplexity shows only threads in current space (not sidebar)
-
-**0.7.2** - Bugfix: Perplexity Spaces export now works (fixed response format normalization)
-
-**0.7.1** - Bugfix: Single-chat export on Claude now works correctly (loadProjectInfo no longer interferes)
-
-**0.7.0** - Claude Projects and Perplexity Spaces support: export entire projects/spaces with all conversations/threads
-
-0.6.10 - Single-chat exports download directly to Downloads folder (no Save As dialog)
-
-0.6.9 - Perplexity.ai single-chat support
-
-0.6.8 - Rebrand to ChatVault Exporter
-
-0.6.7 - Documentation updates
-
-0.6.6 - Reliable project export: wait for conversation DOM, retry failed chats (up to 3 attempts)
-
-0.6.5 - Security hardening: path traversal protection, XSS prevention, improved error handling
+Older entries are listed in git history and prior releases.
