@@ -2,7 +2,8 @@
 // ChatVault — Background Service Worker  v0.6.10
 // =============================================================================
 // Handles file downloads (content scripts can't use chrome.downloads directly).
-// Zero network requests. No telemetry. No phone-home.
+// Attachment filename probing uses fetch() only to allowlisted ChatGPT/OpenAI hosts.
+// No telemetry. No phone-home.
 //
 // What changed in v0.6.10 vs v0.6.9:
 //   • (Version bump for documentation updates)
@@ -11,7 +12,7 @@
 //   • Added Perplexity.ai support (perplexity.ai, www.perplexity.ai).
 //
 // What changed in v0.6.8 vs v0.6.7:
-//   • Rebrand: extension name "Chat Vault Exporter"; default_title for hover tooltip; CV icons.
+//   • Rebrand: extension name "ChatVault Exporter"; default_title for hover tooltip; CV icons.
 //
 // What changed in v0.6.7 vs v0.6.6:
 //   • Single-chat exports now use saveAs: false (no Save As dialog).
@@ -41,6 +42,7 @@
 //   • triggerDownload() extracted as a shared helper (DRY).
 // =============================================================================
 
+importScripts('attachment-url-allowlist.js');
 importScripts('jszip.min.js');
 importScripts('filename-builder.js');
 
@@ -54,6 +56,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'downloadFromUrl') {
     handleDownloadFromUrl(message)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === 'downloadZip') {
+    handleDownloadZip(message)
       .then((result) => sendResponse(result))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
@@ -253,6 +262,44 @@ async function handleChatGPTMainWorldHarvest(tabId) {
 // Data URLs work even if the service worker is killed; blob URLs can become invalid.
 const DATA_URL_MAX_CHARS = 1500000; // ~1.5 MB
 
+/** Optional subfolder under the browser’s default download directory (Windows/Mac/Linux). Synced with popup Settings. */
+const STORAGE_KEY_EXPORT_SUBFOLDER = 'exportSubfolder';
+
+function sanitizeExportSubfolderPath(raw) {
+  let s = typeof raw === 'string' ? raw.trim() : '';
+  if (!s) return '';
+  s = s.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (/^[a-zA-Z]:\//.test(s) || s.startsWith('//')) return '';
+  const parts = s
+    .split('/')
+    .map((seg) => String(seg || '').trim())
+    .map((seg) => seg.replace(/[/\\:*?"<>|\x00-\x1f]/g, '_').replace(/^\.+$/, ''))
+    .filter((seg) => seg && seg !== '.' && seg !== '..');
+  return parts.length ? parts.join('/') : '';
+}
+
+async function getExportSubfolderPrefix() {
+  try {
+    const st = chrome.storage.sync || chrome.storage.local;
+    const data = await st.get(STORAGE_KEY_EXPORT_SUBFOLDER);
+    return sanitizeExportSubfolderPath(data[STORAGE_KEY_EXPORT_SUBFOLDER]);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Prefix relative path so files land in Downloads/&lt;subfolder&gt;/… (Chrome API has no arbitrary folder picker).
+ * @param {string} relativeFilename
+ */
+async function withExportSubfolder(relativeFilename) {
+  const prefix = await getExportSubfolderPrefix();
+  const clean = String(relativeFilename || '').replace(/^\/+/, '').replace(/\.\./g, '_');
+  if (!clean) return clean;
+  if (!prefix) return clean;
+  return `${prefix}/${clean}`;
+}
+
 /** Notify extension pages (e.g. open popup) of batch-export progress. Safe if nothing is listening. */
 function broadcastExportProgress(payload) {
   try {
@@ -265,6 +312,59 @@ function broadcastExportProgress(payload) {
 // handleDownload is used for single-chat exports.
 // Uses saveAs: false to download directly to browser's Downloads folder (no dialog),
 // matching project export behavior.
+
+/**
+ * JSZip / DOS local-time quirk: https://github.com/Stuk/jszip/issues/369
+ * Prefer `zipJsZipDateMs` from popup or content script; MV3 workers often have getTimezoneOffset() === 0 (UTC).
+ */
+function jsZipEntryDateFromOptionalMs(zipJsZipDateMs) {
+  if (typeof zipJsZipDateMs === 'number' && !Number.isNaN(zipJsZipDateMs)) {
+    return new Date(zipJsZipDateMs);
+  }
+  return new Date(msForJsZipDosLocalMtime());
+}
+
+/**
+ * One .zip download for single-chat export when "Create ZIP" is enabled.
+ * @param {{ folderName: string, files: Array<{ filename: string, content: string }> }} message
+ */
+async function handleDownloadZip({ folderName, files }) {
+  try {
+    if (!folderName || typeof folderName !== 'string') {
+      return { success: false, error: 'Missing folder name for ZIP' };
+    }
+    if (!Array.isArray(files) || files.length === 0) {
+      return { success: false, error: 'No files to zip' };
+    }
+    const zip = new JSZip();
+    const prefix = folderName.replace(/\/+$/, '');
+    const entryMtime = jsZipEntryDateFromOptionalMs(message.zipJsZipDateMs);
+    let entryCount = 0;
+    for (const f of files) {
+      if (!f || typeof f.filename !== 'string' || typeof f.content !== 'string') {
+        continue;
+      }
+      const safeName = f.filename.replace(/^\/+/, '').replace(/\.\./g, '_');
+      zip.file(`${prefix}/${safeName}`, f.content, { date: entryMtime });
+      entryCount += 1;
+    }
+    if (entryCount === 0) {
+      return { success: false, error: 'No valid files to include in ZIP' };
+    }
+    const zipFilename = `${prefix}.zip`;
+    const zipBase64 = await zip.generateAsync({ type: 'base64', streamFiles: false });
+    const downloadId = await chrome.downloads.download({
+      url: `data:application/zip;base64,${zipBase64}`,
+      filename: await withExportSubfolder(zipFilename),
+      saveAs: false,
+    });
+    return { success: true, downloadId };
+  } catch (err) {
+    console.error('[ChatVault] handleDownloadZip failed:', err);
+    return { success: false, error: err.message };
+  }
+}
+
 async function handleDownload({ content, filename, mimeType }) {
   try {
     const len = typeof content === 'string' ? content.length : (content && content.size) || 0;
@@ -279,7 +379,11 @@ async function handleDownload({ content, filename, mimeType }) {
       setTimeout(() => URL.revokeObjectURL(url), 15_000);
     }
 
-    const downloadId = await chrome.downloads.download({ url, filename, saveAs: false });
+    const downloadId = await chrome.downloads.download({
+      url,
+      filename: await withExportSubfolder(filename),
+      saveAs: false,
+    });
     return { success: true, downloadId };
   } catch (err) {
     console.error('[ChatVault] handleDownload failed:', err);
@@ -357,6 +461,12 @@ function suggestedBasenameNeedsServerHint(base) {
 }
 
 async function fetchWithHeadersForFilename(url) {
+  if (typeof isAllowedChatVaultAttachmentDownloadUrl === 'function') {
+    if (!isAllowedChatVaultAttachmentDownloadUrl(url)) {
+      console.warn('[ChatVault] fetchWithHeadersForFilename: blocked URL (not allowlisted)');
+      return null;
+    }
+  }
   const tries = [
     () => fetch(url, { method: 'HEAD', credentials: 'include', redirect: 'follow' }),
     () =>
@@ -370,7 +480,21 @@ async function fetchWithHeadersForFilename(url) {
   for (const run of tries) {
     try {
       const r = await run();
-      if (r.ok || r.status === 206) return r;
+      if (r.ok || r.status === 206) {
+        const finalUrl = r.url || url;
+        if (typeof isAllowedChatVaultAttachmentDownloadUrl === 'function') {
+          if (!isAllowedChatVaultAttachmentDownloadUrl(finalUrl)) {
+            try {
+              r.body?.cancel();
+            } catch {
+              /* ignore */
+            }
+            console.warn('[ChatVault] fetchWithHeadersForFilename: blocked redirect target', finalUrl);
+            continue;
+          }
+        }
+        return r;
+      }
     } catch {
       /* next */
     }
@@ -426,11 +550,19 @@ async function handleDownloadFromUrl({ url, filename }) {
     if (!url || typeof url !== 'string' || !/^https:/i.test(url)) {
       return { success: false, error: 'Invalid download URL' };
     }
+    if (typeof isAllowedChatVaultAttachmentDownloadUrl === 'function') {
+      if (!isAllowedChatVaultAttachmentDownloadUrl(url)) {
+        return {
+          success: false,
+          error: 'Download blocked: URL host is not an allowed ChatGPT / OpenAI file host.',
+        };
+      }
+    }
     const initial = filename && filename.trim() ? filename.trim() : 'attachment';
     const resolved = await resolveDownloadFilenameFromUrl(url, initial);
     const downloadId = await chrome.downloads.download({
       url,
-      filename: resolved,
+      filename: await withExportSubfolder(resolved),
       saveAs: false,
     });
     return { success: true, downloadId };
@@ -451,17 +583,17 @@ async function handleDownloadFromUrl({ url, filename }) {
 //   ChatVault-export--P--C--date.md    — if includeMarkdown
 //   ChatVault-export--P--C--date.json  — if includeJson
 //   ChatVault-export--P--C--date.sdoc  — if includeSdoc (SDOC format)
-// If createZip === true, a ZIP is also created alongside the flat files.
+// If createZip === true, only the ZIP is downloaded (no duplicate loose files in Downloads).
 // ---------------------------------------------------------------------------
 
 // slugForExport and buildExportFilename are provided by filename-builder.js.
-const extensionVersion = '0.9.4';
+const extensionVersion = '0.9.7';
 
-async function handleProjectExport({ project, userProjectName, chats, tabId, platform, includeMarkdown = true, includeJson = false, includeSdoc = false, createZip = false }) {
+async function handleProjectExport({ project, userProjectName, chats, tabId, platform, includeMarkdown = true, includeJson = false, includeSdoc = false, createZip = false, zipJsZipDateMs }) {
   const authorizedProjectName = (userProjectName || '').trim() || null;
   console.log('[ChatVault] Project export — platform:', platform, '| project name:', authorizedProjectName ?? '(blank → Unassigned)', '| includeMarkdown:', includeMarkdown, '| includeJson:', includeJson, '| includeSdoc:', includeSdoc, '| createZip:', createZip);
 
-  const dateStr    = new Date().toISOString().slice(0, 10);
+  const dateStr    = exportDateLocalYyyyMmDd();
   const platformSlug = slugForExport(platform) || 'Unknown';
   const pSlug      = slugForExport(authorizedProjectName || '') || 'Unassigned';
   const folderName = `ChatVault-export--${platformSlug}--${pSlug}--${dateStr}`;
@@ -548,6 +680,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
         if (response && response.success) {
           const chatName = response.chatName || chat.title || chat.id || null;
           const chatId   = response.chatId   || chat.id;
+          const chatStartedYyyyMmDd = response.chatStartedYyyyMmDd || undefined;
 
           const primaryExt = includeMarkdown ? 'md' : includeSdoc ? 'sdoc' : 'json';
           const primaryFilename = buildExportFilename({
@@ -556,6 +689,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
             chatName,
             ext: primaryExt,
             chatId,
+            chatStartedYyyyMmDd,
             usedNames,
           });
 
@@ -691,7 +825,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
 
   const manifestObj = {
     schemaVersion:    '2.0',
-    exportedAt:       new Date().toISOString(),
+    exportedAt:       exportTimestampIsoOffset(),
     extensionVersion,
     projectName:      authorizedProjectName || 'Unassigned',
     exportDate:       dateStr,
@@ -705,7 +839,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
   };
 
   // -------------------------------------------------------------------------
-  // Download each file inside the flat folder (via chrome.downloads)
+  // Build file list, then either flat downloads or ZIP only (not both).
   // -------------------------------------------------------------------------
   const allFiles = [
     { filename: '00-project-index.md',   content: indexMd,                     mimeType: 'text/markdown' },
@@ -714,34 +848,36 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
     ...collectedFiles,
   ];
 
-  for (const file of allFiles) {
-    await triggerDownload(`${folderName}/${file.filename}`, file.content, file.mimeType);
-  }
-
-  // -------------------------------------------------------------------------
-  // Optional ZIP
-  // -------------------------------------------------------------------------
   let zipFilename = null;
   if (createZip) {
     const zip = new JSZip();
+    const entryMtime = jsZipEntryDateFromOptionalMs(zipJsZipDateMs);
     for (const file of allFiles) {
-      zip.file(`${folderName}/${file.filename}`, file.content);
+      zip.file(`${folderName}/${file.filename}`, file.content, { date: entryMtime });
     }
     zipFilename = `${folderName}.zip`;
-    const zipBase64 = await zip.generateAsync({ type: 'base64' });
+    const zipBase64 = await zip.generateAsync({ type: 'base64', streamFiles: false });
     await chrome.downloads.download({
       url:      `data:application/zip;base64,${zipBase64}`,
-      filename: zipFilename,
+      filename: await withExportSubfolder(zipFilename),
       saveAs:   false,
     });
+  } else {
+    for (const file of allFiles) {
+      await triggerDownload(`${folderName}/${file.filename}`, file.content, file.mimeType);
+    }
   }
 
   if (chrome.notifications) {
+    const countLabel = `${successCount} chat${successCount !== 1 ? 's' : ''} exported`;
+    const body = createZip
+      ? `${zipFilename} · ${countLabel} (ZIP only).`
+      : `${folderName}/ · ${countLabel}.`;
     chrome.notifications.create({
       type:     'basic',
       iconUrl:  'icons/icon48.png',
       title:    'ChatVault export complete',
-      message:  `${folderName}/ · ${successCount} chat${successCount !== 1 ? 's' : ''} exported.${createZip ? ' ZIP also created.' : ''}`,
+      message:  body,
     });
   }
 
@@ -752,6 +888,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
     failedChats,
     folderName,
     zipFilename,
+    downloadMode: createZip ? 'zip_only' : 'folder',
   };
 }
 
@@ -760,6 +897,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
 // ---------------------------------------------------------------------------
 async function triggerDownload(filename, content, mimeType) {
   try {
+    const outName = await withExportSubfolder(filename);
     const len = typeof content === 'string' ? content.length : 0;
     let url;
     if (len <= DATA_URL_MAX_CHARS) {
@@ -770,7 +908,7 @@ async function triggerDownload(filename, content, mimeType) {
       url = URL.createObjectURL(blob);
       setTimeout(() => URL.revokeObjectURL(url), 15_000);
     }
-    await chrome.downloads.download({ url, filename, saveAs: false });
+    await chrome.downloads.download({ url, filename: outName, saveAs: false });
   } catch (err) {
     console.error('[ChatVault] triggerDownload failed for', filename, err);
   }

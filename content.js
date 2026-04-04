@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.9.4';
+const EXTENSION_VERSION = '0.9.7';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -396,9 +396,17 @@ async function extractClaudeTurn(container, role, hasClipboard) {
 
   if (!content || content.trim().length === 0) return null;
 
-  // Timestamp
-  const timestampEl = container.querySelector('span.text-text-500.text-xs');
-  const timestamp = timestampEl?.textContent?.trim() || undefined;
+  // Timestamp: prefer machine datetime (Claude often shows "Apr 3" without year in UI → Date.parse → 2001).
+  let timestamp;
+  const timeEl = container.querySelector('time[datetime]');
+  if (timeEl) {
+    const dt = timeEl.getAttribute('datetime');
+    if (dt && dt.trim()) timestamp = dt.trim();
+  }
+  if (!timestamp) {
+    const timestampEl = container.querySelector('span.text-text-500.text-xs');
+    timestamp = timestampEl?.textContent?.trim() || undefined;
+  }
 
   return {
     role,
@@ -648,6 +656,13 @@ async function extractChatGPTTurn(container, hasClipboard, sequentialTurnNumber)
 
   if (!content || content.trim().length === 0) return null;
 
+  let timestamp;
+  const timeEl = container.querySelector('time[datetime]');
+  if (timeEl) {
+    const dt = timeEl.getAttribute('datetime');
+    if (dt && dt.trim()) timestamp = dt.trim();
+  }
+
   return {
     role,
     content: content.trim(),
@@ -657,6 +672,7 @@ async function extractChatGPTTurn(container, hasClipboard, sequentialTurnNumber)
     extractionMethod,
     confidence: 0.99,
     classificationSource: 'structural',
+    timestamp,
   };
 }
 
@@ -845,6 +861,9 @@ function createChatGPTAttachmentTryPush(files, seen, skippedBlobRef) {
     if (!absUrl || absUrl.startsWith('blob:')) {
       if (absUrl && absUrl.startsWith('blob:')) skippedBlobRef.n++;
       return;
+    }
+    if (typeof isAllowedChatVaultAttachmentDownloadUrl === 'function') {
+      if (!isAllowedChatVaultAttachmentDownloadUrl(absUrl)) return;
     }
     const urlOpts =
       kind === 'image' && el ? { allowLooseOaiImage: true, element: el } : {};
@@ -1192,13 +1211,23 @@ async function collectChatGPTAttachments() {
   const fromTitle = document.title?.replace(/\s*[-|]\s*ChatGPT.*$/i, '').trim();
   if (fromTitle) chatTitle = fromTitle;
 
+  let outFiles = files;
+  if (typeof isAllowedChatVaultAttachmentDownloadUrl === 'function') {
+    outFiles = files.filter((f) => f && f.url && isAllowedChatVaultAttachmentDownloadUrl(f.url));
+  }
+
   const warnings = [];
-  if (skippedBlob > 0) {
+  if (files.length > outFiles.length) {
     warnings.push(
-      `${skippedBlob} blob: link(s) skipped — use ChatGPT’s UI to save those files if needed.`
+      `${files.length - outFiles.length} file URL(s) skipped (host not allowlisted for download).`
     );
   }
-  if (files.some((f) => f.kind === 'react-props')) {
+  if (skippedBlob > 0) {
+    warnings.push(
+      `${skippedBlob} blob: link(s) skipped; use ChatGPT’s UI to save those files if needed.`
+    );
+  }
+  if (outFiles.some((f) => f.kind === 'react-props')) {
     warnings.push('Some file URLs were read from ChatGPT’s in-page React state (not visible as normal HTML links).');
   }
   if (usedUiClickFallback && uiClickCount > 0) {
@@ -1209,7 +1238,7 @@ async function collectChatGPTAttachments() {
 
   return {
     success: true,
-    files,
+    files: outFiles,
     usedUiClickFallback,
     uiClickCount,
     mainWorldRawCount,
@@ -1347,6 +1376,13 @@ async function extractGeminiUserTurn(userQuery, turnId, hasClipboard) {
 
   if (!content || content.trim().length === 0) return null;
 
+  let timestamp;
+  const timeEl = userQuery.querySelector('time[datetime]');
+  if (timeEl) {
+    const dt = timeEl.getAttribute('datetime');
+    if (dt && dt.trim()) timestamp = dt.trim();
+  }
+
   return {
     role: 'user',
     content: content.trim(),
@@ -1354,6 +1390,7 @@ async function extractGeminiUserTurn(userQuery, turnId, hasClipboard) {
     extractionMethod,
     confidence: 0.99,
     classificationSource: 'structural',
+    timestamp,
   };
 }
 
@@ -1599,6 +1636,13 @@ async function extractGrokTurn(container, hasClipboard) {
 
   if (!content || content.trim().length === 0) return null;
 
+  let timestamp;
+  const timeEl = container.querySelector('time[datetime]');
+  if (timeEl) {
+    const dt = timeEl.getAttribute('datetime');
+    if (dt && dt.trim()) timestamp = dt.trim();
+  }
+
   return {
     role,
     content: content.trim(),
@@ -1606,6 +1650,7 @@ async function extractGrokTurn(container, hasClipboard) {
     extractionMethod,
     confidence: 0.95,
     classificationSource: 'structural',
+    timestamp,
   };
 }
 
@@ -2402,7 +2447,7 @@ function heuristicIntegrityCheck(turns) {
   // Check that we have at least some role diversity
   const roles = new Set(turns.map((t) => t.role).filter(Boolean));
   if (roles.size < 2 && turns.length > 1) {
-    warnings.push('All turns classified as the same role — heuristics may have failed');
+    warnings.push('All turns classified as the same role; heuristics may have failed');
   }
 
   // Check for runs of same role > 3
@@ -2429,6 +2474,82 @@ function heuristicIntegrityCheck(turns) {
   return warnings;
 }
 
+/**
+ * True when timestamp UI text clearly includes a calendar year. Without this, Date.parse maps
+ * month+day-only strings (e.g. "Jan 4", "Apr 3") to year 2001 in Chrome/V8 — wrong for 2026 chats.
+ */
+function uiTimestampTextHasParsableYear(t) {
+  if (/\d{4}/.test(t)) return true;
+  // Numeric dates: 1/4/26, 04-01-2026, 4.1.26 (year is last or ISO year-first handled above)
+  if (/\d{1,2}[./-]\d{1,2}[./-]\d{2,4}/.test(t)) return true;
+  if (/\d{4}[./-]\d{1,2}[./-]\d{1,2}/.test(t)) return true;
+  return false;
+}
+
+/**
+ * Parse UI/thread timestamp text or ISO datetime into local-calendar YYYY-MM-DD for filenames.
+ */
+function parseUiTimestampToYyyyMmDd(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return exportDateLocalYyyyMmDd(new Date(raw));
+  }
+  if (typeof raw !== 'string') return null;
+  const t = raw.trim();
+  if (!t) return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) {
+    const ymd = t.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
+  }
+  const ms = Date.parse(t);
+  if (Number.isNaN(ms)) return null;
+  if (!uiTimestampTextHasParsableYear(t)) return null;
+  return exportDateLocalYyyyMmDd(new Date(ms));
+}
+
+/** Best-effort chat start date from first user turn that carries a parseable timestamp. */
+function inferChatStartedYyyyMmDdFromTurns(turns) {
+  if (!Array.isArray(turns) || turns.length === 0) return null;
+  for (let i = 0; i < turns.length; i++) {
+    if (turns[i].role !== 'user') continue;
+    const y = parseUiTimestampToYyyyMmDd(turns[i].timestamp);
+    if (y) return y;
+  }
+  return null;
+}
+
+/** DOM fallback when turn objects lack timestamps (e.g. partial extract). */
+function inferChatStartedYyyyMmDdFromDom(platform) {
+  if (platform === 'chatgpt') {
+    const first = document.querySelector('[data-message-author-role="user"]');
+    if (first) {
+      const timeEl = first.querySelector('time[datetime]');
+      if (timeEl) {
+        const y = parseUiTimestampToYyyyMmDd(timeEl.getAttribute('datetime'));
+        if (y) return y;
+      }
+    }
+  }
+  if (platform === 'claude') {
+    const first = document.querySelector('[data-testid="user-message"]')
+      || document.querySelector('.font-user-message');
+    if (first) {
+      const pair = first.closest('[data-test-render-count]') || first.closest('.grid') || document.body;
+      const timeEl = first.querySelector('time[datetime]')
+        || (pair && pair.querySelector('time[datetime]'));
+      if (timeEl) {
+        const y = parseUiTimestampToYyyyMmDd(timeEl.getAttribute('datetime'));
+        if (y) return y;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveChatStartedYyyyMmDdForExport(platform, turns) {
+  return inferChatStartedYyyyMmDdFromTurns(turns) || inferChatStartedYyyyMmDdFromDom(platform) || null;
+}
+
 
 // --- src/utils/serializer.js ---
 // =============================================================================
@@ -2443,13 +2564,16 @@ function heuristicIntegrityCheck(turns) {
  */
 function serializeToJSON(extraction, platform) {
   const integrityWarnings = runIntegrityChecks(extraction.turns);
+  const exportInstant = new Date();
+  const chatStartedYyyyMmDdMeta = resolveChatStartedYyyyMmDdForExport(platform, extraction.turns);
 
   const exportData = {
     schema_version: SCHEMA_VERSION,
     export_metadata: {
       source_platform: platformToDisplayName(platform),
       source_url: window.location.href,
-      export_timestamp: new Date().toISOString(),
+      export_timestamp: exportTimestampIsoOffset(exportInstant),
+      chat_started_yyyy_mm_dd: chatStartedYyyyMmDdMeta,
       extension_version: EXTENSION_VERSION,
       total_turns: extraction.turns.length,
       flagged_turns: extraction.turns.filter((t) => t.flagged).length,
@@ -2495,7 +2619,8 @@ function serializeToMarkdown(extraction, platform) {
   const integrityWarnings = runIntegrityChecks(extraction.turns);
 
   const platformName = platformToDisplayName(platform);
-  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const exportInstant = new Date();
+  const timestamp = exportTimestampDisplay(exportInstant);
   const sourceUrl = window.location.href;
 
   const lines = [];
@@ -2537,7 +2662,7 @@ function serializeToMarkdown(extraction, platform) {
 
     if (turn.needsUserResolution) {
       lines.push('');
-      lines.push('> ⚠️ Role classification uncertain — may need manual correction');
+      lines.push('> ⚠️ Role classification uncertain; may need manual correction');
     }
 
     lines.push('');
@@ -2562,7 +2687,7 @@ function serializeToMarkdown(extraction, platform) {
     metadata: {
       source_platform: platformName,
       source_url: sourceUrl,
-      export_timestamp: new Date().toISOString(),
+      export_timestamp: exportTimestampIsoOffset(exportInstant),
       extension_version: EXTENSION_VERSION,
       total_turns: extraction.turns.length,
       flagged_turns: extraction.turns.filter((t) => t.flagged).length,
@@ -2613,7 +2738,8 @@ function serializeToSdoc(extraction, platform, chatTitle, chatId) {
   const rootSlug = `chat-${idSlug}`;
   const platformName = platformToDisplayName(platform);
   const sourceUrl = window.location.href;
-  const ts = new Date().toISOString();
+  const exportInstant = new Date();
+  const ts = exportTimestampIsoOffset(exportInstant);
 
   const metaLines = [
     `        id: ${escapeSdocMetaValue(idSlug)}`,
@@ -2806,6 +2932,24 @@ async function downloadFile(content, filename, mimeType) {
     console.warn('[Chat Archive] Background download failed, trying in-page blob:', err.message);
     downloadViaBlob(content, filename, mimeType);
   }
+}
+
+/** Bundle multiple export parts into one .zip (single-chat + "Create ZIP" enabled). */
+function downloadZipViaBackground(folderName, files) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      { action: 'downloadZip', folderName, files, zipJsZipDateMs: msForJsZipDosLocalMtime() },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else if (response && response.success) {
+          resolve(response);
+        } else {
+          reject(new Error(response?.error || 'ZIP download failed'));
+        }
+      }
+    );
+  });
 }
 
 
@@ -3471,6 +3615,8 @@ async function handleExtraction(options) {
       '';
   }
 
+  const chatStartedYyyyMmDd = resolveChatStartedYyyyMmDdForExport(platform, extraction.turns);
+
   const elapsed = Date.now() - startTime;
 
   // --- skipDownload mode: return raw content for background.js to handle (project export) ---
@@ -3533,11 +3679,13 @@ async function handleExtraction(options) {
         sdoc,
         chatName: resolvedChatName || null,
         chatId: resolvedChatId || null,
+        chatStartedYyyyMmDd,
         metadata: {
           ...baseMeta,
           extraction_time_ms: elapsed,
           formats_exported: formatsExported,
           source_url: window.location.href,
+          chat_started_yyyy_mm_dd: chatStartedYyyyMmDd,
         },
         integrityWarnings: [...mdWarnings, ...jsonWarnings, ...sdocWarnings],
       };
@@ -3554,20 +3702,28 @@ async function handleExtraction(options) {
   }
 
   // --- Normal single-chat download path ---
-  const downloadResults = [];
   const filenameBase = {
     platform: platform,
     projectName: resolvedProjectName,
     chatName: resolvedChatName || null,
     chatId: resolvedChatId,
+    chatStartedYyyyMmDd,
   };
+
+  /** @type {{ format: string, content: string, ext: string, mimeType: string, metadata: object, integrityWarnings: string[] }[]} */
+  const filesToWrite = [];
 
   if (flags.includeJson) {
     try {
       const { json, metadata, integrityWarnings } = serializeToJSON(extraction, platform);
-      const filename = buildExportFilename({ ...filenameBase, ext: 'json' });
-      await downloadFile(json, filename, 'application/json');
-      downloadResults.push({ format: 'json', metadata, integrityWarnings });
+      filesToWrite.push({
+        format: 'json',
+        content: json,
+        ext: 'json',
+        mimeType: 'application/json',
+        metadata,
+        integrityWarnings: integrityWarnings || [],
+      });
     } catch (err) {
       try {
         if (originalClipboard) {
@@ -3583,9 +3739,14 @@ async function handleExtraction(options) {
   if (flags.includeMarkdown) {
     try {
       const { markdown, metadata, integrityWarnings } = serializeToMarkdown(extraction, platform);
-      const filename = buildExportFilename({ ...filenameBase, ext: 'md' });
-      await downloadFile(markdown, filename, 'text/markdown');
-      downloadResults.push({ format: 'markdown', metadata, integrityWarnings });
+      filesToWrite.push({
+        format: 'markdown',
+        content: markdown,
+        ext: 'md',
+        mimeType: 'text/markdown',
+        metadata,
+        integrityWarnings: integrityWarnings || [],
+      });
     } catch (err) {
       if (!flags.includeJson && !flags.includeSdoc) {
         try {
@@ -3609,9 +3770,14 @@ async function handleExtraction(options) {
         resolvedChatName || null,
         resolvedChatId || ''
       );
-      const filename = buildExportFilename({ ...filenameBase, ext: 'sdoc' });
-      await downloadFile(sdoc, filename, 'text/plain');
-      downloadResults.push({ format: 'sdoc', metadata, integrityWarnings });
+      filesToWrite.push({
+        format: 'sdoc',
+        content: sdoc,
+        ext: 'sdoc',
+        mimeType: 'text/plain',
+        metadata,
+        integrityWarnings: integrityWarnings || [],
+      });
     } catch (err) {
       if (!flags.includeJson && !flags.includeMarkdown) {
         try {
@@ -3627,26 +3793,86 @@ async function handleExtraction(options) {
     }
   }
 
+  if (filesToWrite.length === 0) {
+    try {
+      if (originalClipboard) {
+        await navigator.clipboard.writeText(originalClipboard);
+      }
+    } catch {
+      /* non-fatal */
+    }
+    return { success: false, error: 'No export files were generated (all formats failed).' };
+  }
+
+  const wantZip = options.createZip === true && !options.skipDownload;
+
+  if (wantZip) {
+    try {
+      const dateStr = exportDateLocalYyyyMmDd();
+      const platformSlug = slugForExport(platform) || 'Unknown';
+      const pSlug = slugForExport(resolvedProjectName || '') || 'Unassigned';
+      const zipFolderName = `ChatVault-export--${platformSlug}--${pSlug}--${dateStr}`;
+      const zipFiles = filesToWrite.map((item) => ({
+        filename: buildExportFilename({ ...filenameBase, ext: item.ext }),
+        content: item.content,
+      }));
+      await downloadZipViaBackground(zipFolderName, zipFiles);
+    } catch (err) {
+      try {
+        if (originalClipboard) {
+          await navigator.clipboard.writeText(originalClipboard);
+        }
+      } catch {
+        /* non-fatal */
+      }
+      return { success: false, error: `ZIP export failed: ${err.message}` };
+    }
+  } else {
+    for (const item of filesToWrite) {
+      const filename = buildExportFilename({ ...filenameBase, ext: item.ext });
+      try {
+        await downloadFile(item.content, filename, item.mimeType);
+      } catch (err) {
+        try {
+          if (originalClipboard) {
+            await navigator.clipboard.writeText(originalClipboard);
+          }
+        } catch {
+          /* non-fatal */
+        }
+        return { success: false, error: `Download failed: ${err.message}` };
+      }
+    }
+  }
+
   console.log(`[Chat Archive] Export complete: ${extraction.turns.length} turns in ${elapsed}ms`);
 
-  // Restore original clipboard content
   try {
     if (originalClipboard) {
       await navigator.clipboard.writeText(originalClipboard);
     }
   } catch {
-    // Clipboard restore failed — non-fatal
+    /* non-fatal */
   }
 
-  const primaryResult = downloadResults[0] || {};
+  const primaryResult = filesToWrite[0];
+  const allWarnings = filesToWrite.flatMap((f) => f.integrityWarnings || []);
+  const dateStr = exportDateLocalYyyyMmDd();
+  const platformSlug = slugForExport(platform) || 'Unknown';
+  const pSlug = slugForExport(resolvedProjectName || '') || 'Unassigned';
+  const zipFolderName = `ChatVault-export--${platformSlug}--${pSlug}--${dateStr}`;
+
   return {
     success: true,
     metadata: {
       ...(primaryResult.metadata || {}),
       extraction_time_ms: elapsed,
-      formats_exported: downloadResults.map((r) => r.format),
+      formats_exported: filesToWrite.map((r) => r.format),
+      zipped: wantZip,
+      zipFilename: wantZip ? `${zipFolderName}.zip` : undefined,
+      chat_started_yyyy_mm_dd: chatStartedYyyyMmDd,
     },
-    integrityWarnings: primaryResult.integrityWarnings || [],
+    integrityWarnings: allWarnings,
   };
 }
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Chat Vault Exporter",
-  "description": "Export AI chat conversations to durable JSON and Markdown formats. Zero network, zero telemetry — conversations never leave your browser.",
-  "version": "0.9.4",
+  "name": "ChatVault Exporter",
+  "description": "Export AI chat conversations to durable JSON and Markdown formats. Zero network, zero telemetry; conversations never leave your browser.",
+  "version": "0.9.7",
   "permissions": [
     "activeTab",
     "downloads",
@@ -35,7 +35,7 @@
         "https://perplexity.ai/*",
         "https://www.perplexity.ai/*"
       ],
-      "js": ["filename-builder.js", "content.js"],
+      "js": ["filename-builder.js", "attachment-url-allowlist.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

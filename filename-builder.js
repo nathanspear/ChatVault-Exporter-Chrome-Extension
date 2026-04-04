@@ -8,10 +8,11 @@
  *   ChatVault-export--{Platform}--{ProjectSlug}--{YYYY-MM-DD}/
  *
  * Chat file format:
- *   ChatVault-export--{Platform}--{ProjectSlug}--{ChatSlug}--{YYYY-MM-DD}.{ext}
+ *   ChatVault-export--{Platform}--{ProjectSlug}--{ChatSlug}--{chatStartedYYYY-MM-DD}--{exportYYYY-MM-DD}.{ext}
+ *   chatStarted: first-message date when known, else literal "Unknown".
  *
  * Collision variant (same name already used in this export run):
- *   ChatVault-export--{Platform}--{ProjectSlug}--{ChatSlug}--{shortChatId}--{YYYY-MM-DD}.{ext}
+ *   ChatVault-export--{Platform}--{ProjectSlug}--{ChatSlug}--{chatStarted}--{shortChatId}--{exportYYYY-MM-DD}.{ext}
  *
  * Platform values: ChatGPT, Claude, Perplexity, Gemini
  */
@@ -49,6 +50,72 @@ function slugForExport(text) {
     .join('-');
 }
 
+function exportDateLocalYyyyMmDd(d) {
+  d = d || new Date();
+  var y = d.getFullYear();
+  var m = String(d.getMonth() + 1);
+  if (m.length === 1) m = '0' + m;
+  var day = String(d.getDate());
+  if (day.length === 1) day = '0' + day;
+  return y + '-' + m + '-' + day;
+}
+
+/** ISO 8601 timestamp with local offset (parseable by Date.parse), not UTC Zulu. */
+function exportTimestampIsoOffset(d) {
+  d = d || new Date();
+  function pad(n, len) {
+    len = len || 2;
+    var s = String(n);
+    while (s.length < len) s = '0' + s;
+    return s;
+  }
+  var y = d.getFullYear();
+  var mo = pad(d.getMonth() + 1);
+  var day = pad(d.getDate());
+  var h = pad(d.getHours());
+  var min = pad(d.getMinutes());
+  var s = pad(d.getSeconds());
+  var ms = pad(d.getMilliseconds(), 3);
+  var tz = -d.getTimezoneOffset();
+  var sign = tz >= 0 ? '+' : '-';
+  var abs = Math.abs(tz);
+  var ah = pad(Math.floor(abs / 60));
+  var am = pad(abs % 60);
+  return y + '-' + mo + '-' + day + 'T' + h + ':' + min + ':' + s + '.' + ms + sign + ah + ':' + am;
+}
+
+/** Human-readable local date and time for Markdown headers. */
+function exportTimestampDisplay(d) {
+  d = d || new Date();
+  try {
+    return d.toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZoneName: 'short',
+    });
+  } catch (e) {
+    return exportTimestampIsoOffset(d);
+  }
+}
+
+/**
+ * JSZip writes DOS mtimes using getUTC*() but unzip tools treat those fields as local wall time
+ * (https://github.com/Stuk/jszip/issues/369). This value is for `new Date(ms)` so getUTC* match local clock.
+ * Call from a window or content script (correct timezone); MV3 service workers often report UTC only.
+ */
+function msForJsZipDosLocalMtime(d) {
+  d = d || new Date();
+  return d.getTime() - d.getTimezoneOffset() * 60000;
+}
+
+/** Normalize chat-started segment: YYYY-MM-DD or "Unknown". */
+function normalizeChatStartedSegment(v) {
+  if (v == null || v === '') return 'Unknown';
+  var s = String(v).slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return 'Unknown';
+}
+
 /**
  * Build a deterministic export filename.
  *
@@ -57,7 +124,8 @@ function slugForExport(text) {
  * @param {string}   opts.projectName  Raw project name; falsy → "Unassigned"
  * @param {string}   opts.chatName     Raw chat title; falsy → "Untitled"
  * @param {string}   opts.ext          Extension without dot: "json", "md", "zip", etc.
- * @param {string}   [opts.exportDate] ISO date string or YYYY-MM-DD; defaults to today (UTC)
+ * @param {string}   [opts.chatStartedYyyyMmDd]  YYYY-MM-DD when chat began (best effort); else "Unknown"
+ * @param {string}   [opts.exportDate] ISO date string or YYYY-MM-DD; defaults to today (local calendar date)
  * @param {string}   [opts.chatId]     Chat id used only for collision suffix derivation
  * @param {Set}      [opts.usedNames]  Mutable Set of base names already emitted this run;
  *                                     caller passes the same Set for all files in a batch
@@ -71,23 +139,24 @@ function buildExportFilename(opts) {
   var exportDate  = opts.exportDate;
   var chatId      = opts.chatId;
   var usedNames   = opts.usedNames;
+  var startStr    = normalizeChatStartedSegment(opts.chatStartedYyyyMmDd);
 
   var dateStr = exportDate
     ? String(exportDate).slice(0, 10)
-    : new Date().toISOString().slice(0, 10);
+    : exportDateLocalYyyyMmDd();
 
   var platformSlug = slugForExport(platform) || 'Unknown';
   var pSlug = slugForExport(projectName) || 'Unassigned';
   var cSlug = slugForExport(chatName)    || 'Untitled';
 
-  var baseName = 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + cSlug + '--' + dateStr;
+  var baseName = 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + cSlug + '--' + startStr + '--' + dateStr;
 
   if (usedNames && usedNames.has(baseName)) {
     var shortId = (chatId || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || 'x';
-    var candidate = 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + cSlug + '--' + shortId + '--' + dateStr;
+    var candidate = 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + cSlug + '--' + startStr + '--' + shortId + '--' + dateStr;
     var counter = 2;
     while (usedNames.has(candidate)) {
-      candidate = 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + cSlug + '--' + shortId + counter + '--' + dateStr;
+      candidate = 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + cSlug + '--' + startStr + '--' + shortId + counter + '--' + dateStr;
       counter++;
     }
     baseName = candidate;
@@ -104,7 +173,7 @@ function buildExportFilename(opts) {
  * @param {object}  opts
  * @param {string}  opts.platform     Platform name: 'chatgpt', 'claude', 'perplexity', 'gemini'
  * @param {string}  opts.projectName  Raw project name; falsy → "Unassigned"
- * @param {string}  [opts.exportDate] ISO date or YYYY-MM-DD; defaults to today (UTC)
+ * @param {string}  [opts.exportDate] ISO date or YYYY-MM-DD; defaults to today (local calendar date)
  * @returns {string} e.g. "ChatVault-export--ChatGPT--Job-Search--2026-02-21"
  */
 function buildExportFolderName(opts) {
@@ -113,7 +182,7 @@ function buildExportFolderName(opts) {
   var exportDate  = opts.exportDate;
   var dateStr = exportDate
     ? String(exportDate).slice(0, 10)
-    : new Date().toISOString().slice(0, 10);
+    : exportDateLocalYyyyMmDd();
   var platformSlug = slugForExport(platform) || 'Unknown';
   var pSlug = slugForExport(projectName) || 'Unassigned';
   return 'ChatVault-export--' + platformSlug + '--' + pSlug + '--' + dateStr;
@@ -121,7 +190,12 @@ function buildExportFolderName(opts) {
 
 // Make available in both browser (window) and service worker (self) contexts.
 (function(root) {
-  root.slugForExport        = slugForExport;
-  root.buildExportFilename  = buildExportFilename;
-  root.buildExportFolderName = buildExportFolderName;
+  root.slugForExport             = slugForExport;
+  root.buildExportFilename       = buildExportFilename;
+  root.buildExportFolderName     = buildExportFolderName;
+  root.exportDateLocalYyyyMmDd   = exportDateLocalYyyyMmDd;
+  root.exportTimestampIsoOffset  = exportTimestampIsoOffset;
+  root.exportTimestampDisplay    = exportTimestampDisplay;
+  root.msForJsZipDosLocalMtime     = msForJsZipDosLocalMtime;
+  root.normalizeChatStartedSegment = normalizeChatStartedSegment;
 })(typeof self !== 'undefined' ? self : this);

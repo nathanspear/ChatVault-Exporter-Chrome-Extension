@@ -1,29 +1,30 @@
 // =============================================================================
-// ChatVault — Popup Script  v0.9.4
+// ChatVault — Popup Script  v0.9.7
 // =============================================================================
 // Manages the extension popup UI: platform detection, single-chat export,
 // and project-batch export for ChatGPT.
 //
-// Settings architecture (v0.6.4):
-//   All user preferences are persisted in chrome.storage.sync (falls back to
-//   chrome.storage.local if sync is unavailable).  Four keys are stored:
-//     STORAGE_KEY_PROJECT_NAME     — free-text project label for exported filenames
+// Settings architecture:
+//   Export toggles persist in chrome.storage.sync (or local). Project name does not:
+//   the field starts empty every time you open the popup (legacy stored name is removed on load).
+//
 //     STORAGE_KEY_INCLUDE_MARKDOWN — boolean: include .md files (default on)
 //     STORAGE_KEY_INCLUDE_JSON     — boolean: include .json alongside .md (default off)
 //     STORAGE_KEY_INCLUDE_SDOC     — boolean: include .sdoc (SDOC format) (default off)
-//     STORAGE_KEY_CREATE_ZIP       — boolean: bundle exports into a .zip (default off)
+//     STORAGE_KEY_CREATE_ZIP       — boolean: zip project batch export only (default off); single chat is never zipped
+//     STORAGE_KEY_EXPORT_SUBFOLDER — string: optional path under the browser download dir (default "")
 //
-//   loadSettings() reads all four on popup open.
+//   loadSettings() reads toggles on popup open; project name input is always cleared.
 //   saveToggle() persists each checkbox independently on change.
 //
 // Export flow (single chat):
-//   1. Read project name + includeMarkdown + includeJson from storage.
+//   1. Read project name from the input + toggles from storage.
 //   2. Send {action:'extract', options:{includeMarkdown, includeJson, includeSdoc, userProjectName}}.
 //   3. content script serializes requested format(s); at least one must be selected.
 //   4. content.js extracts, serializes, downloads the file(s).
 //
 // Export flow (project batch — ChatGPT only):
-//   1. Read project name + includeMarkdown + includeJson + createZip from storage.
+//   1. Read project name from the input + toggles from storage.
 //   2. Send {action:'exportProject', ...chats, includeMarkdown, includeJson, includeSdoc, createZip} to background.js.
 //   3. background.js navigates the tab to each chat URL, calls content.js with those flags, and
 //      downloads all files into a flat folder (+ optional ZIP).
@@ -51,6 +52,9 @@ const includeMarkdownToggle = document.getElementById('includeMarkdownToggle');
 const includeJsonToggle = document.getElementById('includeJsonToggle');
 const includeSdocToggle = document.getElementById('includeSdocToggle');
 const createZipToggle = document.getElementById('createZipToggle');
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsPanel = document.getElementById('settingsPanel');
+const exportSubfolderInput = document.getElementById('exportSubfolderInput');
 
 const PLATFORM_DISPLAY = {
   claude: 'Claude.ai',
@@ -61,66 +65,64 @@ const PLATFORM_DISPLAY = {
   perplexity: 'Perplexity',
 };
 
+/** Content script missing or not answering: lead with the action; detail in smaller, muted text. */
+const STATUS_REFRESH_FOR_CONTENT_SCRIPT =
+  'Refresh the page. <span style="font-size:11px;color:#666;font-weight:400">(This often happens on tabs that were already open when the extension was last run. Reload the page and then open the extension again.)</span>';
+
 let currentTabId = null;
 let currentTabUrl = '';
 let detectedPlatform = null;
 let currentProject = null;
 let currentChats = [];
 
-// --- Storage: Project Name + Export Toggles ---
-// Single authoritative source for project name and export option toggles.
+// --- Storage: Export toggles only (project name is not persisted) ---
+/** @deprecated Legacy key removed on load so old installs stop repopulating the field. */
 const STORAGE_KEY_PROJECT_NAME = 'userProjectName';
 const STORAGE_KEY_INCLUDE_MARKDOWN = 'exportIncludeMarkdown';
 const STORAGE_KEY_INCLUDE_JSON  = 'exportIncludeJson';
 const STORAGE_KEY_INCLUDE_SDOC  = 'exportIncludeSdoc';
 const STORAGE_KEY_CREATE_ZIP    = 'exportCreateZip';
+const STORAGE_KEY_EXPORT_SUBFOLDER = 'exportSubfolder';
 
-/**
- * Read the user-supplied project name from storage.
- * Returns the raw string (may be empty). Never returns null.
- */
-async function getProjectNameFromStorage() {
-  try {
-    const storage = chrome.storage.sync || chrome.storage.local;
-    const data = await storage.get(STORAGE_KEY_PROJECT_NAME);
-    return data[STORAGE_KEY_PROJECT_NAME] || '';
-  } catch (err) {
-    console.warn('[ChatVault] Could not read project name from storage:', err);
-    return '';
-  }
+/** Project name from the text field only (not persisted between popup opens). */
+function getProjectNameFromInput() {
+  return projectNameInput && projectNameInput.value ? projectNameInput.value.trim() : '';
 }
 
 async function loadSettings() {
   try {
     const storage = chrome.storage.sync || chrome.storage.local;
+    try {
+      await storage.remove(STORAGE_KEY_PROJECT_NAME);
+    } catch {
+      /* ignore */
+    }
     const data = await storage.get([
-      STORAGE_KEY_PROJECT_NAME,
       STORAGE_KEY_INCLUDE_MARKDOWN,
       STORAGE_KEY_INCLUDE_JSON,
       STORAGE_KEY_INCLUDE_SDOC,
       STORAGE_KEY_CREATE_ZIP,
+      STORAGE_KEY_EXPORT_SUBFOLDER,
     ]);
-    projectNameInput.value = data[STORAGE_KEY_PROJECT_NAME] || '';
+    if (projectNameInput) {
+      projectNameInput.value = '';
+    }
     includeMarkdownToggle.checked = data[STORAGE_KEY_INCLUDE_MARKDOWN] !== false; // default true
     includeJsonToggle.checked = data[STORAGE_KEY_INCLUDE_JSON] === true;
     if (includeSdocToggle) {
       includeSdocToggle.checked = data[STORAGE_KEY_INCLUDE_SDOC] === true;
     }
     createZipToggle.checked   = data[STORAGE_KEY_CREATE_ZIP]   === true;
+    if (exportSubfolderInput) {
+      exportSubfolderInput.value = typeof data[STORAGE_KEY_EXPORT_SUBFOLDER] === 'string'
+        ? data[STORAGE_KEY_EXPORT_SUBFOLDER]
+        : '';
+    }
     updateFilenamePreview();
     updateExportButtonLabel();
     refreshSingleChatExportEnabled();
   } catch (err) {
     console.warn('[ChatVault] Could not load settings:', err);
-  }
-}
-
-async function saveProjectName(value) {
-  try {
-    const storage = chrome.storage.sync || chrome.storage.local;
-    await storage.set({ [STORAGE_KEY_PROJECT_NAME]: value });
-  } catch (err) {
-    console.warn('[ChatVault] Could not save project name to storage:', err);
   }
 }
 
@@ -152,6 +154,39 @@ if (includeSdocToggle) {
 }
 createZipToggle.addEventListener('change',   () => saveToggle(STORAGE_KEY_CREATE_ZIP,   createZipToggle.checked));
 
+async function saveExportSubfolder() {
+  if (!exportSubfolderInput) return;
+  try {
+    const storage = chrome.storage.sync || chrome.storage.local;
+    await storage.set({ [STORAGE_KEY_EXPORT_SUBFOLDER]: exportSubfolderInput.value.trim() });
+  } catch (err) {
+    console.warn('[ChatVault] Could not save export subfolder:', err);
+  }
+  updateFilenamePreview();
+}
+
+let exportSubfolderSaveTimer = null;
+function scheduleSaveExportSubfolder() {
+  clearTimeout(exportSubfolderSaveTimer);
+  exportSubfolderSaveTimer = setTimeout(() => saveExportSubfolder(), 400);
+}
+
+if (settingsBtn && settingsPanel) {
+  settingsBtn.addEventListener('click', () => {
+    const open = settingsPanel.style.display !== 'block';
+    settingsPanel.style.display = open ? 'block' : 'none';
+    settingsBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+}
+
+if (exportSubfolderInput) {
+  exportSubfolderInput.addEventListener('input', scheduleSaveExportSubfolder);
+  exportSubfolderInput.addEventListener('blur', () => {
+    clearTimeout(exportSubfolderSaveTimer);
+    saveExportSubfolder();
+  });
+}
+
 function hasAnyFormatSelected() {
   const md = includeMarkdownToggle && includeMarkdownToggle.checked;
   const json = includeJsonToggle && includeJsonToggle.checked;
@@ -166,13 +201,7 @@ function refreshSingleChatExportEnabled() {
 }
 
 function getExportChatButtonLabel() {
-  const parts = [];
-  if (includeMarkdownToggle && includeMarkdownToggle.checked) parts.push('Markdown');
-  if (includeJsonToggle && includeJsonToggle.checked) parts.push('JSON');
-  if (includeSdocToggle && includeSdocToggle.checked) parts.push('SDOC');
-  if (parts.length === 0) return 'Export Chat';
-  if (parts.length === 1) return `Export Chat (${parts[0]})`;
-  return `Export Chat (${parts.join(' + ')})`;
+  return 'Export one chat';
 }
 
 function updateExportButtonLabel() {
@@ -186,11 +215,13 @@ function updateFilenamePreview() {
   } else {
     projectNameWarning.style.display = 'none';
   }
-  const dateStr = new Date().toISOString().slice(0, 10);
+  const dateStr = exportDateLocalYyyyMmDd();
   const pSlug = projectVal ? slugForExport(projectVal) : 'Unassigned';
+  const subRaw = exportSubfolderInput && exportSubfolderInput.value ? exportSubfolderInput.value.trim() : '';
+  const subPrefix = subRaw ? `${subRaw.replace(/\\/g, '/').replace(/^\/+/, '')}/` : '';
   const folderName = `ChatVault-export--${pSlug}--${dateStr}/`;
-  const chatFile   = `ChatVault-export--${pSlug}--Example-Chat--${dateStr}.md`;
-  filenamePreview.textContent = 'Folder: ' + folderName + '  Chat: ' + chatFile;
+  const chatFile   = `ChatVault-export--${pSlug}--Example-Chat--Unknown--${dateStr}.md`;
+  filenamePreview.textContent = 'Folder: ' + subPrefix + folderName + '  Chat: ' + chatFile;
   filenamePreview.style.display = 'block';
 }
 
@@ -213,8 +244,6 @@ function slugForExport(text) {
 }
 
 projectNameInput.addEventListener('input', () => {
-  const val = projectNameInput.value;
-  saveProjectName(val);
   updateFilenamePreview();
 });
 
@@ -227,6 +256,46 @@ function isOnConversationPage(url, platform) {
   if (platform === 'chatgpt') return /\/c\/[a-zA-Z0-9_-]+/.test(url);
   // Gemini, Grok, Perplexity — always on a conversation when the platform is detected
   return true;
+}
+
+/** Sync header subtitle and format tooltips with the detected chat site (from content script `detect`). */
+function updateHelpTooltipsAndHeader(platformKey) {
+  const subtitleEl = document.getElementById('headerSubtitle');
+  const mdEl = document.getElementById('tooltipMarkdown');
+  const jsonEl = document.getElementById('tooltipJson');
+  const toolLabel = platformKey ? PLATFORM_DISPLAY[platformKey] || platformKey : null;
+
+  if (subtitleEl) {
+    subtitleEl.textContent = toolLabel
+      ? `Current site: ${toolLabel}`
+      : 'Export AI conversations from the tab you have open';
+  }
+
+  if (mdEl) {
+    if (toolLabel) {
+      const upload =
+        platformKey === 'claude'
+          ? 'Claude Projects'
+          : platformKey === 'chatgpt'
+            ? 'ChatGPT Projects'
+            : null;
+      mdEl.textContent = upload
+        ? `Markdown is the best format for reading and for uploading into ${upload}. You are on ${toolLabel}. Uncheck only if you need JSON or other formats alone.`
+        : `Markdown is the best format for reading. You are on ${toolLabel}. Uncheck only if you need JSON or other formats alone.`;
+    } else {
+      mdEl.textContent =
+        'Markdown is the best format for reading. Open this extension from a supported chat (Claude.ai, ChatGPT, Gemini, Grok, or Perplexity) so the current site is detected. Uncheck only if you need JSON or other formats alone.';
+    }
+  }
+
+  if (jsonEl) {
+    if (toolLabel) {
+      jsonEl.textContent = `Save as JSON when you want a machine-readable copy of each chat (for example scripts or backup). Markdown is usually easier to read in ${toolLabel}; use JSON if you need the raw structure too.`;
+    } else {
+      jsonEl.textContent =
+        'Save as JSON when you want a machine-readable copy of each chat (for example scripts or backup). Markdown is usually easier to read at a glance; use JSON if you need the raw structure too.';
+    }
+  }
 }
 
 // --- Initialization ---
@@ -305,16 +374,15 @@ async function init() {
           }
         }
       } else {
-        showStatus(
-          'warning',
-          'On a supported site, but content script not responding. Try refreshing the page.'
-        );
+        showStatus('warning', STATUS_REFRESH_FOR_CONTENT_SCRIPT);
       }
     } catch (err) {
-      showStatus('warning', 'Content script not loaded. Try refreshing the page.');
+      showStatus('warning', STATUS_REFRESH_FOR_CONTENT_SCRIPT);
     }
   } catch (err) {
     showStatus('error', `Error: ${err.message}`);
+  } finally {
+    updateHelpTooltipsAndHeader(detectedPlatform);
   }
 }
 
@@ -328,14 +396,14 @@ exportBtn.addEventListener('click', async () => {
   resultsEl.classList.remove('visible');
 
   try {
-    const raw = await getProjectNameFromStorage();
-    const userProjectName = raw.trim() || null;
+    const raw = getProjectNameFromInput();
+    const userProjectName = raw || null;
     const includeMarkdown = includeMarkdownToggle.checked;
     const includeJson = includeJsonToggle.checked;
     const includeSdoc = includeSdocToggle ? includeSdocToggle.checked : false;
 
     if (!includeMarkdown && !includeJson && !includeSdoc) {
-      showStatus('warning', 'Select at least one format: Markdown, JSON, and/or SDOC.');
+      showStatus('warning', 'Select at least one: Save as Markdown, JSON, and/or SDOC.');
       exportBtn.disabled = false;
       exportBtn.textContent = getExportChatButtonLabel();
       return;
@@ -349,6 +417,7 @@ exportBtn.addEventListener('click', async () => {
         includeJson,
         includeSdoc,
         userProjectName,
+        createZip: false,
       },
     });
 
@@ -359,11 +428,14 @@ exportBtn.addEventListener('click', async () => {
       if (includeJson) labels.push('JSON');
       if (includeSdoc) labels.push('SDOC');
       const formatLabel = labels.join(' + ');
+      const zipNote = meta.zipped && meta.zipFilename
+        ? ` One ZIP: <code style="font-size:11px">${escapeHtml(meta.zipFilename)}</code>.`
+        : '';
       showStatus(
         'success',
         `Exported ${meta.total_turns || '?'} turns as ${formatLabel} from ${
           PLATFORM_DISPLAY[detectedPlatform] || detectedPlatform
-        }.`
+        }.${zipNote}`
       );
       showResults(meta, response.integrityWarnings);
     } else {
@@ -457,9 +529,9 @@ if (downloadChatFilesBtn) {
         return;
       }
 
-      const raw = await getProjectNameFromStorage();
-      const dateStr = new Date().toISOString().slice(0, 10);
-      const pSlug = slugForExport(raw.trim()) || 'Unassigned';
+      const raw = getProjectNameFromInput();
+      const dateStr = exportDateLocalYyyyMmDd();
+      const pSlug = slugForExport(raw) || 'Unassigned';
       const chatSlug = slugForExport(list.chatTitle || list.chatId || 'chat') || 'Chat';
       const folder = `ChatVault-files--${pSlug}--${chatSlug}--${dateStr}`;
 
@@ -496,7 +568,7 @@ if (downloadChatFilesBtn) {
         msg += ` <span style="color:#c53030">${failed} failed</span> (check that you are signed in to ChatGPT).`;
       }
       if (list.skippedBlob > 0) {
-        msg += ` ${list.skippedBlob} blob link(s) skipped — save those from the chat UI if needed.`;
+        msg += ` ${list.skippedBlob} blob link(s) skipped; save those from the chat UI if needed.`;
       }
       showStatus(ok > 0 ? 'success' : 'warning', msg);
     } catch (err) {
@@ -586,7 +658,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
   if (phase === 'chatDone') {
     const remLabel = remaining > 0 ? `<strong>${remaining}</strong> left to go` : 'queue finished';
-    const last = lastTitle ? escapeHtml(String(lastTitle)) : '—';
+    const last = lastTitle ? escapeHtml(String(lastTitle)) : '(no title)';
     const mark = lastSucceeded ? '✓' : '✗';
     showStatus(
       'info',
@@ -673,16 +745,20 @@ async function loadProjectInfo() {
 
     currentChats = chats;
     
-    // Update section title based on platform
+    // Banner label: "Project export (LLM)" — must match popup.html default casing
     const projectExportTitle = document.getElementById('projectExportTitle');
     if (detectedPlatform === 'claude') {
-      projectExportTitle.textContent = 'Project Export (Claude)';
+      projectExportTitle.textContent = 'Project export (Claude)';
     } else if (detectedPlatform === 'perplexity') {
-      projectExportTitle.textContent = 'Space Export (Perplexity)';
+      projectExportTitle.textContent = 'Project export (Perplexity)';
     } else if (detectedPlatform === 'chatgpt') {
-      projectExportTitle.textContent = 'Project Export (ChatGPT)';
+      projectExportTitle.textContent = 'Project export (ChatGPT)';
+    } else if (detectedPlatform === 'gemini') {
+      projectExportTitle.textContent = 'Project export (Gemini)';
+    } else if (detectedPlatform === 'grok' || detectedPlatform === 'grok-x') {
+      projectExportTitle.textContent = 'Project export (Grok)';
     } else {
-      projectExportTitle.textContent = 'Project Export';
+      projectExportTitle.textContent = 'Project export';
     }
 
     if (projectResponse?.project) {
@@ -787,18 +863,18 @@ exportProjectBtn.addEventListener('click', async () => {
 
   exportProjectBtn.disabled = true;
   exportProjectBtn.innerHTML = '<span class="spinner"></span> Exporting...';
-  showStatus('info', `Exporting ${selectedChats.length} chat${selectedChats.length !== 1 ? 's' : ''}… Keep this popup open. File will go to your Downloads folder.`);
+  showStatus('info', `Exporting ${selectedChats.length} chat${selectedChats.length !== 1 ? 's' : ''}… Keep this popup open. Files go to your browser download folder (optional subfolder in Settings).`);
   resultsEl.classList.remove('visible');
 
   try {
-    const raw = await getProjectNameFromStorage();
-    const userProjectName = raw.trim() || null;
+    const raw = getProjectNameFromInput();
+    const userProjectName = raw || null;
     const includeMarkdown = includeMarkdownToggle.checked;
     const includeJson = includeJsonToggle.checked;
     const includeSdoc = includeSdocToggle ? includeSdocToggle.checked : false;
     const createZip   = createZipToggle.checked;
     if (!includeMarkdown && !includeJson && !includeSdoc) {
-      showStatus('warning', 'Select at least one format: Markdown, JSON, and/or SDOC.');
+      showStatus('warning', 'Select at least one: Save as Markdown, JSON, and/or SDOC.');
       exportProjectBtn.disabled = false;
       exportProjectBtn.textContent = `Export selected (${getSelectedChats().length})`;
       return;
@@ -815,11 +891,15 @@ exportProjectBtn.addEventListener('click', async () => {
       includeJson,
       includeSdoc,
       createZip,
+      zipJsZipDateMs: msForJsZipDosLocalMtime(),
     });
 
     if (response && response.success) {
       const failedCount = response.failedChats?.length || 0;
-      
+      const outputRows = response.downloadMode === 'zip_only'
+        ? `<div class="stat"><span class="stat-label">ZIP file</span><span class="stat-value">${escapeHtml(response.zipFilename || '')}</span></div>`
+        : `<div class="stat"><span class="stat-label">Folder</span><span class="stat-value">${escapeHtml(response.folderName || '')}</span></div>`;
+
       if (failedCount > 0) {
         // Some chats failed - show warning with details
         const failedTitles = response.failedChats
@@ -840,7 +920,7 @@ exportProjectBtn.addEventListener('click', async () => {
         resultsEl.innerHTML = `
           <div class="stat"><span class="stat-label">Exported</span><span class="stat-value">${response.chatCount}</span></div>
           <div class="stat"><span class="stat-label">Failed</span><span class="stat-value" style="color: #e74c3c;">${failedCount}</span></div>
-          <div class="stat"><span class="stat-label">Folder</span><span class="stat-value">${escapeHtml(response.folderName || '')}</span></div>
+          ${outputRows}
           <div class="failed-chats-list" style="margin-top: 8px; font-size: 11px; color: #e74c3c;">
             <strong>Failed chats:</strong>
             <ul style="margin: 4px 0 0 16px; padding: 0;">${failedListHtml}</ul>
@@ -850,11 +930,13 @@ exportProjectBtn.addEventListener('click', async () => {
         // All succeeded
         showStatus(
           'success',
-          `Done. ${response.chatCount} chat${response.chatCount !== 1 ? 's' : ''} exported. Check your Downloads folder.`
+          response.downloadMode === 'zip_only'
+            ? `Done. ${response.chatCount} chat${response.chatCount !== 1 ? 's' : ''} saved in one ZIP. Check Downloads.`
+            : `Done. ${response.chatCount} chat${response.chatCount !== 1 ? 's' : ''} exported. Check your Downloads folder.`
         );
         resultsEl.innerHTML = `
           <div class="stat"><span class="stat-label">Exported</span><span class="stat-value">${response.chatCount}</span></div>
-          <div class="stat"><span class="stat-label">Folder</span><span class="stat-value">${escapeHtml(response.folderName || '')}</span></div>
+          ${outputRows}
         `;
       }
       resultsEl.classList.add('visible');

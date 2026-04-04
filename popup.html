@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=380">
-  <title>Chat Vault Exporter</title>
+  <title>ChatVault Exporter</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -21,16 +21,110 @@
       border-bottom: 1px solid #e5e5e5;
     }
 
+    .header-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
     .header h1 {
       font-size: 16px;
       font-weight: 600;
       display: flex;
       align-items: center;
       gap: 6px;
+      flex: 1;
+      min-width: 0;
     }
 
     .header h1 .icon { font-size: 18px; }
     .header .subtitle { font-size: 11px; color: #888; margin-top: 2px; }
+
+    .header-gear {
+      flex-shrink: 0;
+      width: 34px;
+      height: 34px;
+      margin-top: -2px;
+      padding: 0;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      background: #fff;
+      color: #444;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .header-gear:hover {
+      background: #f5f5f5;
+      border-color: #bbb;
+    }
+
+    .header-gear svg {
+      display: block;
+    }
+
+    .settings-panel {
+      display: none;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #e8e8e8;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #444;
+    }
+
+    .settings-panel label.settings-label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: #333;
+    }
+
+    .settings-panel .settings-hint {
+      font-size: 11px;
+      color: #777;
+      margin-top: 6px;
+    }
+
+    .settings-panel input[type="text"] {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    /* Matched banners: single-chat options (top) and project export (bottom) */
+    .export-section-banner {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 10px 14px;
+      background: linear-gradient(180deg, #f8f8f9 0%, #f0f0f2 100%);
+      border: 1px solid #d8d8dc;
+      border-radius: 8px;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+    }
+
+    .export-section-banner .export-section-banner-text {
+      font-size: 12px;
+      font-weight: 600;
+      color: #2a2a2a;
+      text-transform: uppercase;
+      letter-spacing: 0.45px;
+      line-height: 1.3;
+      text-align: center;
+    }
+
+    .export-section-banner .info-icon-wrap {
+      flex-shrink: 0;
+    }
 
     .content { padding: 16px; }
 
@@ -301,8 +395,21 @@
 </head>
 <body>
   <div class="header">
-    <h1><span class="icon">📦</span> Chat Vault Exporter</h1>
-    <div class="subtitle">Export AI conversations · Optimized for Claude Projects</div>
+    <div class="header-top">
+      <h1><span class="icon">📦</span> ChatVault Exporter</h1>
+      <button type="button" id="settingsBtn" class="header-gear" title="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settingsPanel">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
+    <div id="headerSubtitle" class="subtitle">Export AI conversations from the tab you have open</div>
+    <div id="settingsPanel" class="settings-panel" role="region" aria-label="Export settings">
+      <label class="settings-label" for="exportSubfolderInput">Export subfolder (inside Downloads)</label>
+      <input type="text" id="exportSubfolderInput" placeholder="e.g. ChatVault" maxlength="200" autocomplete="off" />
+      <p class="settings-hint">Chrome saves exports under your browser’s download directory (including on Windows). You can nest them in a subfolder here. Full custom paths are not supported—only a relative folder name such as <code style="font-size:10px">ChatVault/2026</code>.</p>
+    </div>
   </div>
 
   <div class="content">
@@ -310,38 +417,32 @@
       Detecting platform...
     </div>
 
-    <div class="section-title">Export Options</div>
+    <div class="export-section-banner" role="group" aria-label="Single chat export options">
+      <span class="export-section-banner-text">Single chat export options</span>
+    </div>
     <div style="margin-bottom: 12px;">
       <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; cursor: pointer;">
         <input type="checkbox" id="includeMarkdownToggle" style="cursor: pointer;" checked>
-        Include Markdown <span style="font-size: 11px; color: #888;">(default: on)</span>
+        Save as Markdown <span style="font-size: 11px; color: #888;">(default: on)</span>
         <span class="info-icon-wrap">
           <span class="info-icon">i</span>
-          <span class="info-tooltip">Markdown is the best format for reading and for uploading into Claude Projects. Uncheck only if you need JSON or other formats alone.</span>
+          <span id="tooltipMarkdown" class="info-tooltip">Markdown is the best format for reading. Open this extension from a supported chat so the current site is detected. Uncheck only if you need JSON or other formats alone.</span>
         </span>
       </label>
       <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; cursor: pointer;">
         <input type="checkbox" id="includeJsonToggle" style="cursor: pointer;">
-        Include JSON <span style="font-size: 11px; color: #888;">(default: off)</span>
+        Save as JSON <span style="font-size: 11px; color: #888;">(default: off)</span>
         <span class="info-icon-wrap">
           <span class="info-icon">i</span>
-          <span class="info-tooltip">Include JSON so you have a machine-readable copy of each chat (e.g. for scripts or backup). Markdown is best for reading and for Claude; turn this on if you need the raw structure too.</span>
+          <span id="tooltipJson" class="info-tooltip">Save as JSON when you want a machine-readable copy of each chat (for example scripts or backup). Markdown is usually easier to read at a glance; use JSON if you need the raw structure too.</span>
         </span>
       </label>
       <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; cursor: pointer;">
         <input type="checkbox" id="includeSdocToggle" style="cursor: pointer;">
-        Include SDOC <span style="font-size: 11px; color: #888;">(default: off)</span>
+        Save as SDOC <span style="font-size: 11px; color: #888;">(default: off)</span>
         <span class="info-icon-wrap">
           <span class="info-icon">i</span>
-          <span class="info-tooltip">SDOC (.sdoc) uses explicit brace scoping — structured plain text that is easy for AI tools to parse and chunk. Pair with Markdown/JSON or use alone.</span>
-        </span>
-      </label>
-      <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
-        <input type="checkbox" id="createZipToggle" style="cursor: pointer;">
-        Create ZIP archive <span style="font-size: 11px; color: #888;">(default: off)</span>
-        <span class="info-icon-wrap">
-          <span class="info-icon">i</span>
-          <span class="info-tooltip">Bundle the whole export into one .zip file. Useful for sharing or archiving a project. If off, each file is downloaded separately into a folder. Applies to project export only; single-chat export always downloads files directly.</span>
+          <span class="info-tooltip">SDOC (.sdoc) uses explicit brace scoping: structured plain text that is easy for AI tools to parse and chunk. Pair with Markdown/JSON or use alone.</span>
         </span>
       </label>
     </div>
@@ -349,7 +450,7 @@
     <div class="section-title">Current Chat</div>
 
     <button id="exportBtn" class="btn btn-primary" disabled>
-      Export Chat
+      Export one chat
     </button>
 
     <button
@@ -367,13 +468,30 @@
 
     <div class="divider"></div>
 
-    <div class="section-title" id="projectExportTitle">Project Export</div>
+    <div class="export-section-banner" role="group" aria-label="Project export">
+      <span id="projectExportTitle" class="export-section-banner-text">Project export</span>
+      <span class="info-icon-wrap">
+        <span class="info-icon">i</span>
+        <span class="info-tooltip">If you're on your recents (or whatever the tool calls the whole history of chats), it'll take all of those chats as a project.</span>
+      </span>
+    </div>
+
+    <div style="margin-bottom: 12px;">
+      <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+        <input type="checkbox" id="createZipToggle" style="cursor: pointer;">
+        Zip project export <span style="font-size: 11px; color: #888;">(default: off)</span>
+        <span class="info-icon-wrap">
+          <span class="info-icon">i</span>
+          <span class="info-tooltip">When on, exporting selected chats below downloads one .zip (every chat plus index files). When off, files download as a flat folder. Single-chat export always saves separate files, not a zip.</span>
+        </span>
+      </label>
+    </div>
 
     <div class="section-title">
       Project Name
       <span class="info-icon-wrap">
         <span class="info-icon">i</span>
-        <span class="info-tooltip">We couldn't reliably detect the project name from the page, so you enter it here. It's used in exported filenames. Leave blank to use 'Unassigned'.</span>
+        <span class="info-tooltip">We couldn't reliably detect the project name from the page, so you enter it here for exported filenames. It is not saved. Each time you open this popup the field starts empty. Leave blank to use "Unassigned".</span>
       </span>
     </div>
     <div style="margin-bottom: 12px;">
@@ -418,10 +536,11 @@
 
   <div class="footer">
     <div class="privacy">
-      <span class="lock">🔒</span> Conversations never leave your device. Exports save only to your Downloads folder. No telemetry or server upload.
+      <span class="lock">🔒</span> Conversations never leave your device. Exports save under your browser’s download folder (optional subfolder in Settings). No telemetry or server upload.
     </div>
   </div>
 
+  <script src="filename-builder.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

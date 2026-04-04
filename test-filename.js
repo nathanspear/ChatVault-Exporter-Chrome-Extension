@@ -73,7 +73,7 @@ console.log('\nTest 1: User-supplied project name in filename');
   });
   assert('full filename with platform and user project name',
     result,
-    'ChatVault-export--Chatgpt--Tanget--Article-Request-Clarification--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Tanget--Article-Request-Clarification--Unknown--2026-02-21.json');
   assertContains('prefix is ChatVault-export',       result, 'ChatVault-export--');
   assertContains('platform in first segment',        result, '--Chatgpt--');
   assertContains('user project name in position',    result, '--Tanget--');
@@ -89,7 +89,7 @@ console.log('\nTest 1: User-supplied project name in filename');
   });
   assert('another platform example',
     result2,
-    'ChatVault-export--Claude--Family--Taxes-Overview--2026-02-21.md');
+    'ChatVault-export--Claude--Family--Taxes-Overview--Unknown--2026-02-21.md');
 })();
 
 // ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ console.log('\nTest 2: Chat with no project uses "Unassigned"');
   });
   assert('filename uses Unassigned for missing project',
     result,
-    'ChatVault-export--Gemini--Unassigned--My-Chat--2026-02-21.md');
+    'ChatVault-export--Gemini--Unassigned--My-Chat--Unknown--2026-02-21.md');
 
   const result2 = buildExportFilename({
     platform:    'perplexity',
@@ -163,19 +163,39 @@ console.log('\nTest 4: Collision produces deterministic shortChatId suffix');
   const first = buildExportFilename(opts);
   assert('first filename has no collision suffix',
     first,
-    'ChatVault-export--Chatgpt--Family--Taxes-Overview--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Family--Taxes-Overview--Unknown--2026-02-21.json');
 
   // Second call with same names + same Set → collision
   const second = buildExportFilename(opts);
   assert('second filename has deterministic shortChatId suffix',
     second,
-    'ChatVault-export--Chatgpt--Family--Taxes-Overview--abc12345--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Family--Taxes-Overview--Unknown--abc12345--2026-02-21.json');
 
   // Third call — shortId+counter variant
   const third = buildExportFilename(opts);
   assert('third filename has shortId+2 suffix',
     third,
-    'ChatVault-export--Chatgpt--Family--Taxes-Overview--abc123452--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Family--Taxes-Overview--Unknown--abc123452--2026-02-21.json');
+
+  const used2 = new Set();
+  const startOpts = {
+    platform: 'chatgpt',
+    projectName: 'Family',
+    chatName: 'Taxes Overview',
+    chatStartedYyyyMmDd: '2024-08-01',
+    ext: 'json',
+    exportDate: '2026-02-21',
+    chatId: 'abc-12345xyz',
+    usedNames: used2,
+  };
+  const firstKnownStart = buildExportFilename(startOpts);
+  assert('first export with known chat-started date has no shortId',
+    firstKnownStart,
+    'ChatVault-export--Chatgpt--Family--Taxes-Overview--2024-08-01--2026-02-21.json');
+  const dupStart = buildExportFilename(startOpts);
+  assert('collision with known chat-started date keeps started segment before shortId',
+    dupStart,
+    'ChatVault-export--Chatgpt--Family--Taxes-Overview--2024-08-01--abc12345--2026-02-21.json');
   assert('third filename differs from first',  third !== first,  true);
   assert('third filename differs from second', third !== second, true);
 })();
@@ -197,15 +217,16 @@ console.log('\nTest 5: Prefix and separator format');
   // Case is preserved (LinkedIn stays LinkedIn, not lowercased to Linkedin)
   assert('full canonical filename matches',
     result,
-    'ChatVault-export--Chatgpt--Job-Search--LinkedIn-Optimization-Help--2026-02-20.md');
+    'ChatVault-export--Chatgpt--Job-Search--LinkedIn-Optimization-Help--Unknown--2026-02-20.md');
   const parts = result.replace(/\.md$/, '').split('--');
-  assert('exactly 5 segments (prefix, platform, project, chat, date)',
-    parts.length, 5);
+  assert('exactly 6 segments (prefix, platform, project, chat, started, export)',
+    parts.length, 6);
   assert('segment 0 is ChatVault-export', parts[0], 'ChatVault-export');
   assert('segment 1 is platform slug',    parts[1], 'Chatgpt');
   assert('segment 2 is project slug',     parts[2], 'Job-Search');
   assert('segment 3 is chat slug',        parts[3], 'LinkedIn-Optimization-Help');
-  assert('segment 4 is date',             parts[4], '2026-02-20');
+  assert('segment 4 is chat-started',     parts[4], 'Unknown');
+  assert('segment 5 is export date',       parts[5], '2026-02-20');
 })();
 
 // ---------------------------------------------------------------------------
@@ -226,7 +247,7 @@ console.log('\nTest 6: UI project name "Apps" propagates correctly (regression f
   assertNotContains('filename does NOT contain --Unassigned--', result, '--Unassigned--');
   assert('full filename matches expected',
     result,
-    'ChatVault-export--Chatgpt--Apps--Apps-App-Ideas-Suggestions--2026-02-21.md');
+    'ChatVault-export--Chatgpt--Apps--Apps-App-Ideas-Suggestions--Unknown--2026-02-21.md');
 })();
 
 // ---------------------------------------------------------------------------
@@ -339,11 +360,11 @@ console.log('\nTest 9: Flat folder — required index files exist');
 
   assert('chat md file in folder',
     `${folderName}/${mdFile}`,
-    'ChatVault-export--Chatgpt--Job-Search--2026-02-21/ChatVault-export--Chatgpt--Job-Search--LinkedIn-Optimization-Help--2026-02-21.md');
+    'ChatVault-export--Chatgpt--Job-Search--2026-02-21/ChatVault-export--Chatgpt--Job-Search--LinkedIn-Optimization-Help--Unknown--2026-02-21.md');
 
   assert('chat json file in folder',
     `${folderName}/${jsonFile}`,
-    'ChatVault-export--Chatgpt--Job-Search--2026-02-21/ChatVault-export--Chatgpt--Job-Search--LinkedIn-Optimization-Help--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Job-Search--2026-02-21/ChatVault-export--Chatgpt--Job-Search--LinkedIn-Optimization-Help--Unknown--2026-02-21.json');
 })();
 
 // ---------------------------------------------------------------------------
@@ -400,7 +421,7 @@ console.log('\nTest 11: includeJson toggle — on means json chat files exist');
   assert('json file is present when includeJson is true', files.some(function(f) { return f.endsWith('.json'); }), true);
   assert('json filename matches md filename with swapped ext',
     files[1],
-    'ChatVault-export--Chatgpt--Family--Summer-Plans--2026-02-21.json');
+    'ChatVault-export--Chatgpt--Family--Summer-Plans--Unknown--2026-02-21.json');
 })();
 
 // ---------------------------------------------------------------------------
