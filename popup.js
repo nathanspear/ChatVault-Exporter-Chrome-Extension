@@ -1,5 +1,5 @@
 // =============================================================================
-// ChatVault — Popup Script  v0.9.3
+// ChatVault — Popup Script  v0.9.4
 // =============================================================================
 // Manages the extension popup UI: platform detection, single-chat export,
 // and project-batch export for ChatGPT.
@@ -10,6 +10,7 @@
 //     STORAGE_KEY_PROJECT_NAME     — free-text project label for exported filenames
 //     STORAGE_KEY_INCLUDE_MARKDOWN — boolean: include .md files (default on)
 //     STORAGE_KEY_INCLUDE_JSON     — boolean: include .json alongside .md (default off)
+//     STORAGE_KEY_INCLUDE_SDOC     — boolean: include .sdoc (SDOC format) (default off)
 //     STORAGE_KEY_CREATE_ZIP       — boolean: bundle exports into a .zip (default off)
 //
 //   loadSettings() reads all four on popup open.
@@ -17,14 +18,14 @@
 //
 // Export flow (single chat):
 //   1. Read project name + includeMarkdown + includeJson from storage.
-//   2. Derive format from the two checkboxes (markdown | json | both).
-//   3. Send {action:'extract', options:{format, userProjectName}} to content script.
+//   2. Send {action:'extract', options:{includeMarkdown, includeJson, includeSdoc, userProjectName}}.
+//   3. content script serializes requested format(s); at least one must be selected.
 //   4. content.js extracts, serializes, downloads the file(s).
 //
 // Export flow (project batch — ChatGPT only):
 //   1. Read project name + includeMarkdown + includeJson + createZip from storage.
-//   2. Send {action:'exportProject', ...chats, includeMarkdown, includeJson, createZip} to background.js.
-//   3. background.js navigates the tab to each chat URL, calls content.js with derived format, and
+//   2. Send {action:'exportProject', ...chats, includeMarkdown, includeJson, includeSdoc, createZip} to background.js.
+//   3. background.js navigates the tab to each chat URL, calls content.js with those flags, and
 //      downloads all files into a flat folder (+ optional ZIP).
 // =============================================================================
 
@@ -48,6 +49,7 @@ const projectNameWarning = document.getElementById('projectNameWarning');
 const filenamePreview = document.getElementById('filenamePreview');
 const includeMarkdownToggle = document.getElementById('includeMarkdownToggle');
 const includeJsonToggle = document.getElementById('includeJsonToggle');
+const includeSdocToggle = document.getElementById('includeSdocToggle');
 const createZipToggle = document.getElementById('createZipToggle');
 
 const PLATFORM_DISPLAY = {
@@ -60,6 +62,7 @@ const PLATFORM_DISPLAY = {
 };
 
 let currentTabId = null;
+let currentTabUrl = '';
 let detectedPlatform = null;
 let currentProject = null;
 let currentChats = [];
@@ -69,6 +72,7 @@ let currentChats = [];
 const STORAGE_KEY_PROJECT_NAME = 'userProjectName';
 const STORAGE_KEY_INCLUDE_MARKDOWN = 'exportIncludeMarkdown';
 const STORAGE_KEY_INCLUDE_JSON  = 'exportIncludeJson';
+const STORAGE_KEY_INCLUDE_SDOC  = 'exportIncludeSdoc';
 const STORAGE_KEY_CREATE_ZIP    = 'exportCreateZip';
 
 /**
@@ -89,13 +93,23 @@ async function getProjectNameFromStorage() {
 async function loadSettings() {
   try {
     const storage = chrome.storage.sync || chrome.storage.local;
-    const data = await storage.get([STORAGE_KEY_PROJECT_NAME, STORAGE_KEY_INCLUDE_MARKDOWN, STORAGE_KEY_INCLUDE_JSON, STORAGE_KEY_CREATE_ZIP]);
+    const data = await storage.get([
+      STORAGE_KEY_PROJECT_NAME,
+      STORAGE_KEY_INCLUDE_MARKDOWN,
+      STORAGE_KEY_INCLUDE_JSON,
+      STORAGE_KEY_INCLUDE_SDOC,
+      STORAGE_KEY_CREATE_ZIP,
+    ]);
     projectNameInput.value = data[STORAGE_KEY_PROJECT_NAME] || '';
     includeMarkdownToggle.checked = data[STORAGE_KEY_INCLUDE_MARKDOWN] !== false; // default true
     includeJsonToggle.checked = data[STORAGE_KEY_INCLUDE_JSON] === true;
+    if (includeSdocToggle) {
+      includeSdocToggle.checked = data[STORAGE_KEY_INCLUDE_SDOC] === true;
+    }
     createZipToggle.checked   = data[STORAGE_KEY_CREATE_ZIP]   === true;
     updateFilenamePreview();
     updateExportButtonLabel();
+    refreshSingleChatExportEnabled();
   } catch (err) {
     console.warn('[ChatVault] Could not load settings:', err);
   }
@@ -122,19 +136,43 @@ async function saveToggle(key, value) {
 includeMarkdownToggle.addEventListener('change', () => {
   saveToggle(STORAGE_KEY_INCLUDE_MARKDOWN, includeMarkdownToggle.checked);
   updateExportButtonLabel();
+  refreshSingleChatExportEnabled();
 });
 includeJsonToggle.addEventListener('change', () => {
   saveToggle(STORAGE_KEY_INCLUDE_JSON, includeJsonToggle.checked);
   updateExportButtonLabel();
+  refreshSingleChatExportEnabled();
 });
+if (includeSdocToggle) {
+  includeSdocToggle.addEventListener('change', () => {
+    saveToggle(STORAGE_KEY_INCLUDE_SDOC, includeSdocToggle.checked);
+    updateExportButtonLabel();
+    refreshSingleChatExportEnabled();
+  });
+}
 createZipToggle.addEventListener('change',   () => saveToggle(STORAGE_KEY_CREATE_ZIP,   createZipToggle.checked));
 
-function getExportChatButtonLabel() {
+function hasAnyFormatSelected() {
   const md = includeMarkdownToggle && includeMarkdownToggle.checked;
   const json = includeJsonToggle && includeJsonToggle.checked;
-  if (md && json) return 'Export Chat (Markdown + JSON)';
-  if (json) return 'Export Chat (JSON)';
-  return 'Export Chat';
+  const sdoc = includeSdocToggle && includeSdocToggle.checked;
+  return !!(md || json || sdoc);
+}
+
+function refreshSingleChatExportEnabled() {
+  if (!exportBtn || !detectedPlatform || !currentTabUrl) return;
+  if (!isOnConversationPage(currentTabUrl, detectedPlatform)) return;
+  exportBtn.disabled = !hasAnyFormatSelected();
+}
+
+function getExportChatButtonLabel() {
+  const parts = [];
+  if (includeMarkdownToggle && includeMarkdownToggle.checked) parts.push('Markdown');
+  if (includeJsonToggle && includeJsonToggle.checked) parts.push('JSON');
+  if (includeSdocToggle && includeSdocToggle.checked) parts.push('SDOC');
+  if (parts.length === 0) return 'Export Chat';
+  if (parts.length === 1) return `Export Chat (${parts[0]})`;
+  return `Export Chat (${parts.join(' + ')})`;
 }
 
 function updateExportButtonLabel() {
@@ -202,8 +240,9 @@ async function init() {
       return;
     }
     currentTabId = tab.id;
+    currentTabUrl = tab.url || '';
 
-    const url = tab.url || '';
+    const url = currentTabUrl;
     const supportedDomains = [
       'claude.ai',
       'chat.openai.com',
@@ -230,7 +269,7 @@ async function init() {
         // Fix 1: only enable single-chat export when on an actual conversation page
         const conversationPage = isOnConversationPage(url, detectedPlatform);
         if (conversationPage) {
-          exportBtn.disabled = false;
+          exportBtn.disabled = !hasAnyFormatSelected();
           if (downloadChatFilesBtn) {
             if (detectedPlatform === 'chatgpt') {
               downloadChatFilesBtn.style.display = 'block';
@@ -293,29 +332,33 @@ exportBtn.addEventListener('click', async () => {
     const userProjectName = raw.trim() || null;
     const includeMarkdown = includeMarkdownToggle.checked;
     const includeJson = includeJsonToggle.checked;
-    
-    // Derive format from checkboxes
-    let format = 'markdown'; // default fallback
-    if (includeMarkdown && includeJson) {
-      format = 'both';
-    } else if (includeMarkdown) {
-      format = 'markdown';
-    } else if (includeJson) {
-      format = 'json';
+    const includeSdoc = includeSdocToggle ? includeSdocToggle.checked : false;
+
+    if (!includeMarkdown && !includeJson && !includeSdoc) {
+      showStatus('warning', 'Select at least one format: Markdown, JSON, and/or SDOC.');
+      exportBtn.disabled = false;
+      exportBtn.textContent = getExportChatButtonLabel();
+      return;
     }
-    
-    console.log('[ChatVault] Single-chat export — project name:', userProjectName ?? '(blank → Unassigned)', '| includeMarkdown:', includeMarkdown, '| includeJson:', includeJson, '| format:', format);
+
+    console.log('[ChatVault] Single-chat export — project name:', userProjectName ?? '(blank → Unassigned)', '| includeMarkdown:', includeMarkdown, '| includeJson:', includeJson, '| includeSdoc:', includeSdoc);
     const response = await sendToTab(currentTabId, {
       action: 'extract',
       options: {
-        format,
+        includeMarkdown,
+        includeJson,
+        includeSdoc,
         userProjectName,
       },
     });
 
     if (response && response.success) {
       const meta = response.metadata || {};
-      const formatLabel = includeJson ? 'Markdown + JSON' : 'Markdown';
+      const labels = [];
+      if (includeMarkdown) labels.push('Markdown');
+      if (includeJson) labels.push('JSON');
+      if (includeSdoc) labels.push('SDOC');
+      const formatLabel = labels.join(' + ');
       showStatus(
         'success',
         `Exported ${meta.total_turns || '?'} turns as ${formatLabel} from ${
@@ -610,7 +653,8 @@ function getSelectedChats() {
 
 function updateExportSelectedState() {
   const n = getSelectedChats().length;
-  exportProjectBtn.disabled = n === 0;
+  const fmt = hasAnyFormatSelected();
+  exportProjectBtn.disabled = n === 0 || !fmt;
   exportProjectBtn.textContent = n === 0 ? 'Export selected' : `Export selected (${n})`;
 }
 
@@ -751,8 +795,15 @@ exportProjectBtn.addEventListener('click', async () => {
     const userProjectName = raw.trim() || null;
     const includeMarkdown = includeMarkdownToggle.checked;
     const includeJson = includeJsonToggle.checked;
+    const includeSdoc = includeSdocToggle ? includeSdocToggle.checked : false;
     const createZip   = createZipToggle.checked;
-    console.log('[ChatVault] Project export — project name:', userProjectName ?? '(blank → Unassigned)', '| includeMarkdown:', includeMarkdown, '| includeJson:', includeJson, '| createZip:', createZip);
+    if (!includeMarkdown && !includeJson && !includeSdoc) {
+      showStatus('warning', 'Select at least one format: Markdown, JSON, and/or SDOC.');
+      exportProjectBtn.disabled = false;
+      exportProjectBtn.textContent = `Export selected (${getSelectedChats().length})`;
+      return;
+    }
+    console.log('[ChatVault] Project export — project name:', userProjectName ?? '(blank → Unassigned)', '| includeMarkdown:', includeMarkdown, '| includeJson:', includeJson, '| includeSdoc:', includeSdoc, '| createZip:', createZip);
     const response = await chrome.runtime.sendMessage({
       action: 'exportProject',
       project: currentProject,
@@ -762,6 +813,7 @@ exportProjectBtn.addEventListener('click', async () => {
       platform: detectedPlatform,
       includeMarkdown,
       includeJson,
+      includeSdoc,
       createZip,
     });
 

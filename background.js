@@ -448,17 +448,18 @@ async function handleDownloadFromUrl({ url, filename }) {
 //   00-project-index.md          — always generated
 //   00-project-summary.md        — template placeholder
 //   manifest.json                — lightweight index
-//   ChatVault-export--P--C--date.md    — always (one per chat)
-//   ChatVault-export--P--C--date.json  — only if includeJson === true
+//   ChatVault-export--P--C--date.md    — if includeMarkdown
+//   ChatVault-export--P--C--date.json  — if includeJson
+//   ChatVault-export--P--C--date.sdoc  — if includeSdoc (SDOC format)
 // If createZip === true, a ZIP is also created alongside the flat files.
 // ---------------------------------------------------------------------------
 
 // slugForExport and buildExportFilename are provided by filename-builder.js.
-const extensionVersion = '0.9.3';
+const extensionVersion = '0.9.4';
 
-async function handleProjectExport({ project, userProjectName, chats, tabId, platform, includeMarkdown = true, includeJson = false, createZip = false }) {
+async function handleProjectExport({ project, userProjectName, chats, tabId, platform, includeMarkdown = true, includeJson = false, includeSdoc = false, createZip = false }) {
   const authorizedProjectName = (userProjectName || '').trim() || null;
-  console.log('[ChatVault] Project export — platform:', platform, '| project name:', authorizedProjectName ?? '(blank → Unassigned)', '| includeMarkdown:', includeMarkdown, '| includeJson:', includeJson, '| createZip:', createZip);
+  console.log('[ChatVault] Project export — platform:', platform, '| project name:', authorizedProjectName ?? '(blank → Unassigned)', '| includeMarkdown:', includeMarkdown, '| includeJson:', includeJson, '| includeSdoc:', includeSdoc, '| createZip:', createZip);
 
   const dateStr    = new Date().toISOString().slice(0, 10);
   const platformSlug = slugForExport(platform) || 'Unknown';
@@ -532,21 +533,13 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
           continue; // Retry
         }
 
-        // Derive format from includeMarkdown + includeJson
-        let format = 'markdown';
-        if (includeMarkdown && includeJson) {
-          format = 'both';
-        } else if (includeMarkdown) {
-          format = 'markdown';
-        } else if (includeJson) {
-          format = 'json';
-        }
-
-        // Extract the conversation
+        // Extract the conversation (content script returns markdown/json/sdoc per flags)
         const response = await sendMessageToTab(tabId, {
           action: 'extract',
           options: {
-            format,
+            includeMarkdown,
+            includeJson,
+            includeSdoc,
             skipDownload: true,
             userProjectName: authorizedProjectName,
           },
@@ -556,7 +549,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
           const chatName = response.chatName || chat.title || chat.id || null;
           const chatId   = response.chatId   || chat.id;
 
-          const primaryExt = includeMarkdown ? 'md' : 'json';
+          const primaryExt = includeMarkdown ? 'md' : includeSdoc ? 'sdoc' : 'json';
           const primaryFilename = buildExportFilename({
             platform,
             projectName: authorizedProjectName,
@@ -571,8 +564,23 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
           }
 
           if (includeJson && response.json) {
-            const jsonFilename = includeMarkdown ? primaryFilename.replace(/\.md$/, '.json') : primaryFilename;
+            let jsonFilename = primaryFilename;
+            if (primaryFilename.endsWith('.md')) {
+              jsonFilename = primaryFilename.replace(/\.md$/, '.json');
+            } else if (primaryFilename.endsWith('.sdoc')) {
+              jsonFilename = primaryFilename.replace(/\.sdoc$/, '.json');
+            }
             collectedFiles.push({ filename: jsonFilename, content: response.json, mimeType: 'application/json' });
+          }
+
+          if (includeSdoc && response.sdoc) {
+            let sdocFilename = primaryFilename;
+            if (primaryFilename.endsWith('.md')) {
+              sdocFilename = primaryFilename.replace(/\.md$/, '.sdoc');
+            } else if (primaryFilename.endsWith('.json')) {
+              sdocFilename = primaryFilename.replace(/\.json$/, '.sdoc');
+            }
+            collectedFiles.push({ filename: sdocFilename, content: response.sdoc, mimeType: 'text/plain' });
           }
 
           chatIndex.push({
@@ -690,6 +698,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
     chatCount:        successCount,
     errorCount,
     includeJson,
+    includeSdoc,
     createZip,
     chats: chatIndex.map((c) => ({ title: c.title, filename: c.filename, url: c.url })),
     failedChats: failedChats.map((c) => ({ title: c.title, url: c.url, error: c.error })),

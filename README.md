@@ -1,8 +1,8 @@
 # ChatVault Exporter — Chrome extension
 
-**Version:** 0.9.3 (see `manifest.json`)
+**Version:** 0.9.4 (see `manifest.json`)
 
-Export AI chat conversations to **Markdown** and/or **JSON** from the browser. Supports single-chat export on several platforms and **project batch export** on ChatGPT and Claude. On **ChatGPT**, you can also download **file attachments** from the open conversation.
+Export AI chat conversations to **Markdown**, **JSON**, and/or **SDOC** (`.sdoc`) from the browser. Supports single-chat export on several platforms and **project batch export** on ChatGPT and Claude. On **ChatGPT**, you can also download **file attachments** from the open conversation.
 
 Full project documentation (CLI, archive formats, ingest): [repository root README](../README.md).
 
@@ -34,7 +34,7 @@ Full project documentation (CLI, archive formats, ingest): [repository root READ
 
 ## Features
 
-- **Single chat** — Markdown, JSON, or both; optional project name for filenames.
+- **Single chat** — Markdown, JSON, SDOC, or any combination; optional project name for filenames.
 - **Project export** — ChatGPT/Claude: batch export with `00-project-index.md`, `manifest.json`, optional ZIP.
 - **ChatGPT attachments** — **Download chat attachments** button (on a `/c/...` chat): discovers file URLs (DOM + shadow roots + in-page React props when needed), filters out common UI CDN noise, resolves filenames/extensions (URL hints + `Content-Disposition` / `Content-Type` via `HEAD`/`Range` requests in the background worker), falls back to clicking native file controls when URLs are not exposed.
 - **Privacy-first** — No telemetry. Extraction runs in your browser; downloads use your normal browser session cookies for the same origins you are already logged into.
@@ -71,7 +71,7 @@ Full project documentation (CLI, archive formats, ingest): [repository root READ
 
 1. Open a conversation on a supported site.
 2. Click the **ChatVault Exporter** icon.
-3. Choose **Include Markdown** / **Include JSON** (and project name for filenames).
+3. Choose **Include Markdown** / **Include JSON** / **Include SDOC** (and project name for filenames). At least one format must be on.
 4. Click **Export Chat**.
 
 ### Export a project (ChatGPT or Claude)
@@ -120,7 +120,7 @@ Project slug defaults to **Unassigned** if the field is blank.
 |-------|-------------|
 | **Content script not loaded** | Refresh the page; ensure the site URL is allowed. |
 | **No conversation turns found** | Be on an actual chat URL with messages visible; hard-refresh. |
-| **Export Chat disabled** | Open a conversation (not only home/Recents). |
+| **Export Chat disabled** | Open a conversation (not only home/Recents), and enable at least one of Markdown / JSON / SDOC. |
 | **Attachments: nothing downloaded** | Reload the chat tab; open the extension from that tab; ensure files appear in the UI. |
 | **Attachments: wrong/extra files** | Update to the latest extension; older builds could pick up UI CDN assets. Current builds filter `oaiusercontent.com` links to real attachment signals. |
 | **Project export incomplete** | Scroll the sidebar to load all chats before exporting. |
@@ -139,6 +139,7 @@ Project slug defaults to **Unassigned** if the field is blank.
 
 | Version | Notes |
 |---------|--------|
+| **0.9.4** | Optional **SDOC** (`.sdoc`) export alongside Markdown/JSON; popup storage key `exportIncludeSdoc`. |
 | **0.9.3** | Stricter `oaiusercontent.com` filtering (fewer UI false positives); docs aligned. |
 | **0.9.2** | Server-assisted filenames (`Content-Disposition`, MIME) for attachments. |
 | **0.9.1** | MAIN-world React harvest + `scripting` permission for attachment URLs. |

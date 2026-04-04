@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.9.3';
+const EXTENSION_VERSION = '0.9.4';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -2572,6 +2572,127 @@ function serializeToMarkdown(extraction, platform) {
   };
 }
 
+/** SDOC: backslash-escape special characters (aligned with vscode-sdoc parser ESCAPABLE). */
+function escapeSdocText(text) {
+  const esc = '\\{}@[]()*`#!~<>$+=-^?|';
+  const set = new Set(esc.split(''));
+  let out = '';
+  for (const ch of text) {
+    if (set.has(ch)) out += '\\';
+    out += ch;
+  }
+  return out;
+}
+
+function escapeSdocMetaValue(value) {
+  return escapeSdocText(String(value).replace(/\r?\n/g, ' '));
+}
+
+/** Escape prose for SDOC scopes; leave fenced ``` code blocks unescaped so braces inside code stay valid. */
+function escapeSdocSegment(text) {
+  if (text == null || text === '') return '';
+  const parts = String(text).split(/(```[\s\S]*?```)/g);
+  return parts.map((part) => (part.startsWith('```') ? part : escapeSdocText(part))).join('');
+}
+
+function sdocCapitalizeRole(role) {
+  const r = role || 'unknown';
+  return r.charAt(0).toUpperCase() + r.slice(1);
+}
+
+/**
+ * Serialize extracted turns into SDOC (brace-scoped, agent-friendly).
+ * @see https://github.com/nathanspear/sdoc
+ */
+function serializeToSdoc(extraction, platform, chatTitle, chatId) {
+  const integrityWarnings = runIntegrityChecks(extraction.turns);
+  const headingTitle = escapeSdocText(
+    (chatTitle || '').replace(/\s+/g, ' ').trim() || 'Chat'
+  );
+  const idSlug = String(chatId || 'chat').replace(/[^a-zA-Z0-9_-]/g, '-') || 'chat';
+  const rootSlug = `chat-${idSlug}`;
+  const platformName = platformToDisplayName(platform);
+  const sourceUrl = window.location.href;
+  const ts = new Date().toISOString();
+
+  const metaLines = [
+    `        id: ${escapeSdocMetaValue(idSlug)}`,
+    `        title: ${escapeSdocMetaValue(chatTitle || 'Chat')}`,
+    `        source_platform: ${escapeSdocMetaValue(platformName)}`,
+    `        source_url: ${escapeSdocMetaValue(sourceUrl)}`,
+    `        export_timestamp: ${escapeSdocMetaValue(ts)}`,
+    `        total_turns: ${extraction.turns.length}`,
+    `        partial_export: ${extraction.partial ? 'true' : 'false'}`,
+  ];
+
+  const messageBlocks = extraction.turns
+    .map((turn, i) => {
+      const role = sdocCapitalizeRole(turn.role || 'unknown');
+      const slug = `turn-${i + 1}-${turn.role || 'unknown'}`;
+      const raw = turn.content && String(turn.content).trim().length ? turn.content : '*(empty)*';
+      const body = escapeSdocSegment(raw);
+      const lines = [`    # ${role} @${slug}`, '    {'];
+      if (body) {
+        for (const line of body.split('\n')) {
+          lines.push(line.length ? `        ${line}` : '');
+        }
+      }
+      lines.push('    }');
+      return lines.join('\n');
+    })
+    .join('\n\n');
+
+  const doc = [
+    `# ${headingTitle} @${rootSlug}`,
+    '{',
+    '    # Meta @meta',
+    '    {',
+    metaLines.join('\n'),
+    '    }',
+    '',
+    '    # Conversation @conversation',
+    '    {',
+    messageBlocks,
+    '    }',
+    '}',
+    '',
+  ].join('\n');
+
+  return {
+    sdoc: doc,
+    metadata: {
+      source_platform: platformName,
+      source_url: sourceUrl,
+      export_timestamp: ts,
+      extension_version: EXTENSION_VERSION,
+      total_turns: extraction.turns.length,
+      flagged_turns: extraction.turns.filter((t) => t.flagged).length,
+      partial_export: extraction.partial || false,
+    },
+    integrityWarnings,
+  };
+}
+
+function resolveExportFlags(options) {
+  if (
+    options.includeMarkdown !== undefined ||
+    options.includeJson !== undefined ||
+    options.includeSdoc !== undefined
+  ) {
+    return {
+      includeMarkdown: options.includeMarkdown === true,
+      includeJson: options.includeJson === true,
+      includeSdoc: options.includeSdoc === true,
+    };
+  }
+  const f = options.format || 'markdown';
+  return {
+    includeMarkdown: f === 'markdown' || f === 'both',
+    includeJson: f === 'json' || f === 'both',
+    includeSdoc: false,
+  };
+}
+
 /**
  * Run integrity checks on extracted turns before serialization.
  */
@@ -3225,8 +3346,11 @@ async function handleExtraction(options) {
     return { success: false, error: 'Not on a supported chat platform' };
   }
 
-  const format = options.format || 'markdown'; // 'markdown', 'json', 'both'
-  console.log(`[Chat Archive] Starting extraction: platform=${platform}, format=${format}`);
+  const flags = resolveExportFlags(options);
+  if (!flags.includeMarkdown && !flags.includeJson && !flags.includeSdoc) {
+    return { success: false, error: 'Select at least one export format (Markdown, JSON, or SDOC).' };
+  }
+  console.log(`[Chat Archive] Starting extraction: platform=${platform}`, flags);
   const startTime = Date.now();
 
   // Save original clipboard content to restore later
@@ -3337,6 +3461,15 @@ async function handleExtraction(options) {
     resolvedChatName = fromTitle || extraction.turns?.find((t) => t.role === 'user')?.content?.slice(0, 60) || '';
     resolvedChatId = window.location.pathname || window.location.search?.slice(1) || '';
   }
+  if (
+    !resolvedChatName &&
+    (platform === 'claude' || platform === 'gemini' || platform === 'grok' || platform === 'grok-x')
+  ) {
+    resolvedChatName =
+      document.title?.split(/\|/)[0]?.trim() ||
+      extraction.turns?.find((t) => t.role === 'user')?.content?.slice(0, 60) ||
+      '';
+  }
 
   const elapsed = Date.now() - startTime;
 
@@ -3344,51 +3477,77 @@ async function handleExtraction(options) {
   // background.js owns all filename logic and download initiation in this mode.
   if (options.skipDownload) {
     try {
-      const { markdown, metadata: mdMeta, integrityWarnings: mdWarnings } = serializeToMarkdown(extraction, platform);
+      let markdown = null;
+      let mdMeta = {};
+      let mdWarnings = [];
+      if (flags.includeMarkdown) {
+        const r = serializeToMarkdown(extraction, platform);
+        markdown = r.markdown;
+        mdMeta = r.metadata;
+        mdWarnings = r.integrityWarnings || [];
+      }
       let json = null;
       let jsonMeta = {};
       let jsonWarnings = [];
-      if (format === 'both') {
+      if (flags.includeJson) {
         const r = serializeToJSON(extraction, platform);
         json = r.json;
         jsonMeta = r.metadata;
         jsonWarnings = r.integrityWarnings || [];
       }
+      let sdoc = null;
+      let sdocMeta = {};
+      let sdocWarnings = [];
+      if (flags.includeSdoc) {
+        const r = serializeToSdoc(
+          extraction,
+          platform,
+          resolvedChatName || null,
+          resolvedChatId || ''
+        );
+        sdoc = r.sdoc;
+        sdocMeta = r.metadata;
+        sdocWarnings = r.integrityWarnings || [];
+      }
       console.log(`[ChatVault] skipDownload extraction complete: ${extraction.turns.length} turns in ${elapsed}ms`);
-      
-      // Restore original clipboard content
+
       try {
         if (originalClipboard) {
           await navigator.clipboard.writeText(originalClipboard);
         }
       } catch {
-        // Clipboard restore failed — non-fatal
+        /* non-fatal */
       }
-      
-      const formatsExported = format === 'both' ? ['markdown', 'json'] : ['markdown'];
+
+      const formatsExported = [];
+      if (flags.includeMarkdown) formatsExported.push('markdown');
+      if (flags.includeJson) formatsExported.push('json');
+      if (flags.includeSdoc) formatsExported.push('sdoc');
+
+      const baseMeta =
+        flags.includeMarkdown ? mdMeta : flags.includeJson ? jsonMeta : sdocMeta;
       return {
         success: true,
         json,
         markdown,
+        sdoc,
         chatName: resolvedChatName || null,
-        chatId:   resolvedChatId   || null,
+        chatId: resolvedChatId || null,
         metadata: {
-          ...mdMeta,
-          ...jsonMeta,
+          ...baseMeta,
           extraction_time_ms: elapsed,
-          formats_exported:   formatsExported,
-          source_url:         window.location.href,
+          formats_exported: formatsExported,
+          source_url: window.location.href,
         },
-        integrityWarnings: [...(mdWarnings || []), ...jsonWarnings],
+        integrityWarnings: [...mdWarnings, ...jsonWarnings, ...sdocWarnings],
       };
     } catch (err) {
-      // Restore clipboard even on error
       try {
         if (originalClipboard) {
           await navigator.clipboard.writeText(originalClipboard);
         }
       } catch {
-        // Clipboard restore failed — non-fatal
+        /* non-fatal */
       }
       return { success: false, error: `Extraction (skipDownload) failed: ${err.message}` };
     }
@@ -3397,50 +3556,74 @@ async function handleExtraction(options) {
   // --- Normal single-chat download path ---
   const downloadResults = [];
   const filenameBase = {
-    platform:    platform,
+    platform: platform,
     projectName: resolvedProjectName,
-    chatName:    resolvedChatName || null,
-    chatId:      resolvedChatId,
+    chatName: resolvedChatName || null,
+    chatId: resolvedChatId,
   };
 
-  if (format === 'json' || format === 'both') {
+  if (flags.includeJson) {
     try {
       const { json, metadata, integrityWarnings } = serializeToJSON(extraction, platform);
       const filename = buildExportFilename({ ...filenameBase, ext: 'json' });
       await downloadFile(json, filename, 'application/json');
       downloadResults.push({ format: 'json', metadata, integrityWarnings });
     } catch (err) {
-      // Restore clipboard on error
       try {
         if (originalClipboard) {
           await navigator.clipboard.writeText(originalClipboard);
         }
       } catch {
-        // Clipboard restore failed — non-fatal
+        /* non-fatal */
       }
       return { success: false, error: `JSON export failed: ${err.message}` };
     }
   }
 
-  if (format === 'markdown' || format === 'both') {
+  if (flags.includeMarkdown) {
     try {
       const { markdown, metadata, integrityWarnings } = serializeToMarkdown(extraction, platform);
       const filename = buildExportFilename({ ...filenameBase, ext: 'md' });
       await downloadFile(markdown, filename, 'text/markdown');
       downloadResults.push({ format: 'markdown', metadata, integrityWarnings });
     } catch (err) {
-      if (format === 'markdown') {
-        // Restore clipboard on error
+      if (!flags.includeJson && !flags.includeSdoc) {
         try {
           if (originalClipboard) {
             await navigator.clipboard.writeText(originalClipboard);
           }
         } catch {
-          // Clipboard restore failed — non-fatal
+          /* non-fatal */
         }
         return { success: false, error: `Markdown export failed: ${err.message}` };
       }
-      console.warn('[Chat Archive] Markdown export failed (JSON succeeded):', err);
+      console.warn('[Chat Archive] Markdown export failed (other format(s) may have succeeded):', err);
+    }
+  }
+
+  if (flags.includeSdoc) {
+    try {
+      const { sdoc, metadata, integrityWarnings } = serializeToSdoc(
+        extraction,
+        platform,
+        resolvedChatName || null,
+        resolvedChatId || ''
+      );
+      const filename = buildExportFilename({ ...filenameBase, ext: 'sdoc' });
+      await downloadFile(sdoc, filename, 'text/plain');
+      downloadResults.push({ format: 'sdoc', metadata, integrityWarnings });
+    } catch (err) {
+      if (!flags.includeJson && !flags.includeMarkdown) {
+        try {
+          if (originalClipboard) {
+            await navigator.clipboard.writeText(originalClipboard);
+          }
+        } catch {
+          /* non-fatal */
+        }
+        return { success: false, error: `SDOC export failed: ${err.message}` };
+      }
+      console.warn('[Chat Archive] SDOC export failed (other format(s) may have succeeded):', err);
     }
   }
 

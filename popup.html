@@ -328,6 +328,14 @@
           <span class="info-tooltip">Include JSON so you have a machine-readable copy of each chat (e.g. for scripts or backup). Markdown is best for reading and for Claude; turn this on if you need the raw structure too.</span>
         </span>
       </label>
+      <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; cursor: pointer;">
+        <input type="checkbox" id="includeSdocToggle" style="cursor: pointer;">
+        Include SDOC <span style="font-size: 11px; color: #888;">(default: off)</span>
+        <span class="info-icon-wrap">
+          <span class="info-icon">i</span>
+          <span class="info-tooltip">SDOC (.sdoc) uses explicit brace scoping — structured plain text that is easy for AI tools to parse and chunk. Pair with Markdown/JSON or use alone.</span>
+        </span>
+      </label>
       <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
         <input type="checkbox" id="createZipToggle" style="cursor: pointer;">
         Create ZIP archive <span style="font-size: 11px; color: #888;">(default: off)</span>
