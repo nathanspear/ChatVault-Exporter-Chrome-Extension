@@ -87,7 +87,7 @@ async function waitForConversationReady(options = {}) {
     gemini: 'user-query, model-response',
     grok: '[class*="message"], [data-testid*="message"]',
     'grok-x': '[data-testid*="message"], [class*="message"]',
-    perplexity: 'button[data-testid="copy-query-button"], .prose.text-pretty',
+    perplexity: 'button[aria-label="Copy query"], button[data-testid="copy-query-button"], .prose.text-pretty',
   };
 
   const selector = selectors[platform];
@@ -2045,7 +2045,7 @@ async function extractPerplexityConversation(options = {}) {
   console.log('[Chat Archive] Perplexity: Starting scroll-to-load...');
   const scrollCount = await scrollToLoadAll(
     scrollContainer,
-    'button[data-testid="copy-query-button"], button[aria-label="Copy Query"], .prose.text-pretty',
+    'button[aria-label="Copy query"], button[data-testid="copy-query-button"], button[aria-label="Copy Query"], .prose.text-pretty',
     startTime
   );
   console.log('[Chat Archive] Perplexity: Scroll complete, performed', scrollCount, 'scrolls');
@@ -2054,7 +2054,7 @@ async function extractPerplexityConversation(options = {}) {
   // Use direct text extraction only for speed
   console.log(`[Chat Archive] Perplexity: Using direct text extraction (skipping clipboard for speed)`);
 
-  const queryButtons = Array.from(document.querySelectorAll('button[data-testid="copy-query-button"], button[aria-label="Copy Query"]'))
+  const queryButtons = Array.from(document.querySelectorAll('button[aria-label="Copy query"], button[data-testid="copy-query-button"], button[aria-label="Copy Query"]'))
     .filter((btn) => !btn.closest('pre, code'));
   const responseButtons = Array.from(document.querySelectorAll('button[aria-label="Copy"]'))
     .filter((btn) => {
@@ -2155,7 +2155,7 @@ function findPerplexityScrollContainer() {
     () => document.querySelector('.max-w-threadContentWidth, [class*="threadContentWidth"]'),
     () => document.querySelector('main'),
     () => {
-      const first = document.querySelector('button[data-testid="copy-query-button"], .prose');
+      const first = document.querySelector('button[aria-label="Copy query"], button[data-testid="copy-query-button"], .prose');
       return first ? findScrollableAncestor(first) : null;
     },
     () => document.scrollingElement || document.documentElement,

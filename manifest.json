@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ChatVault Exporter",
   "description": "Export AI chat conversations to durable JSON and Markdown formats. Zero network, zero telemetry; conversations never leave your browser.",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "permissions": [
     "activeTab",
     "downloads",

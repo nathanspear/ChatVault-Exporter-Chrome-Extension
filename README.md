@@ -1,6 +1,6 @@
 # ChatVault Exporter — Chrome extension
 
-**Version:** 0.9.7 (see `manifest.json`)
+**Version:** 0.9.8 (see `manifest.json`)
 
 Export AI chat conversations to **Markdown**, **JSON**, and/or **SDOC** (`.sdoc`) from the browser. Supports single-chat export on several platforms and **project batch export** on ChatGPT and Claude. On **ChatGPT**, you can also download **file attachments** from the open conversation.
 
@@ -146,6 +146,7 @@ Project slug defaults to **Unassigned** if the field is blank.
 
 | Version | Notes |
 |---------|--------|
+| **0.9.8** | Fix Perplexity extraction: Perplexity removed `data-testid` attributes; selectors updated to `aria-label="Copy query"` / `aria-label="Copy"`. |
 | **0.9.7** | **Project name** field is **not persisted**; cleared on every popup open (legacy `userProjectName` removed from storage). |
 | **0.9.6** | **Create ZIP** applies to **single-chat** export too (one `.zip` with selected Markdown/JSON/SDOC). |
 | **0.9.5** | Strict **host allowlist** for attachment downloads and HEAD/Range filename probes (`attachment-url-allowlist.js`); blocks credentialed requests to arbitrary HTTPS hosts. |
