@@ -82,7 +82,7 @@ async function waitForConversationReady(options = {}) {
 
   const selectors = {
     chatgpt:
-      'article[data-testid^="conversation-turn-"], [data-testid^="conversation-turn-"], [data-message-author-role="user"], [data-message-author-role="assistant"]',
+      'article[data-testid^="conversation-turn-"], [data-testid^="conversation-turn-"], [data-message-author-role="user"], [data-message-author-role="assistant"], [data-turn-key]',
     claude: '[data-testid="user-message"], .font-claude-message',
     gemini: 'user-query, model-response',
     grok: '[class*="message"], [data-testid*="message"]',
@@ -495,19 +495,22 @@ function findClaudeScrollContainer() {
 
 // --- src/extractors/chatgpt.js ---
 // =============================================================================
-// Chat Archive — ChatGPT Extractor (Pass 0 + Direct Text Fallback)
+// Chat Archive — ChatGPT Extractor
 // =============================================================================
-// Architecture: Appendix E
-// Turn container: article[data-testid="conversation-turn-{N}"] — one per turn (flat)
-// Copy button: button[data-testid="copy-turn-action-button"] on both roles
-// Role signals: data-turn="user"|"assistant" on <article> (0.99)
-//               data-message-author-role="user"|"assistant" (0.99)
-//
-// Newer ChatGPT web builds often omit article[data-testid^="conversation-turn-"] and
-// expose flat [data-message-author-role] nodes instead — we support both.
+// Legacy layout:
+//   one DOM container per message, identified by conversation-turn/data-message-author-role.
+// 2026-09 app-shell layout:
+//   one [data-turn-key] container per user+assistant exchange. The timeline is
+//   virtualized and uses flex-direction: column-reverse, so scrollTop is 0 at
+//   the newest end and negative toward older history.
 
 const CHATGPT_MESSAGE_ROOT_SEL =
   '[data-message-author-role="user"], [data-message-author-role="assistant"]';
+const CHATGPT_PAIR_TURN_SEL = '[data-turn-key]';
+const CHATGPT_PAIR_TIMELINE_SEL = '[data-app-action-timeline-scroll]';
+const CHATGPT_PAIR_USER_SEL = '[data-user-message-bubble]';
+const CHATGPT_PAIR_HISTORY_WAIT_MS = 8000;
+const CHATGPT_PAIR_MAX_SCROLL_STEPS = 1000;
 
 function findChatGPTMessageRootElements() {
   const candidates = document.querySelectorAll(CHATGPT_MESSAGE_ROOT_SEL);
@@ -520,24 +523,52 @@ function findChatGPTMessageRootElements() {
   return roots;
 }
 
-/** Turn containers: legacy <article> turns, or any conversation-turn testid, or message-role roots. */
+function getTopLevelChatGPTPairTurns(root = document) {
+  return Array.from(root.querySelectorAll(CHATGPT_PAIR_TURN_SEL)).filter((el) => {
+    const parentTurn = el.parentElement?.closest(CHATGPT_PAIR_TURN_SEL);
+    return !parentTurn;
+  });
+}
+
+/** Turn containers for either ChatGPT layout. */
 function getChatGPTTurnContainerNodes() {
   const articles = document.querySelectorAll('article[data-testid^="conversation-turn-"]');
   if (articles.length > 0) return Array.from(articles);
+
   const byTestid = document.querySelectorAll('[data-testid^="conversation-turn-"]');
   if (byTestid.length > 0) return Array.from(byTestid);
+
   const msgRoots = findChatGPTMessageRootElements();
   if (msgRoots.length > 0) return msgRoots;
-  const looseArticles = Array.from(document.querySelectorAll('main article, [class*="react-scroll"] article')).filter(
-    (a) =>
-      a.querySelector(
-        '[data-message-author-role="user"], [data-message-author-role="assistant"], [data-message-content]'
-      )
+
+  const pairTurns = getTopLevelChatGPTPairTurns();
+  if (pairTurns.length > 0) return pairTurns;
+
+  const looseArticles = Array.from(
+    document.querySelectorAll('main article, [class*="react-scroll"] article')
+  ).filter((a) =>
+    a.querySelector(
+      '[data-message-author-role="user"], [data-message-author-role="assistant"], [data-message-content]'
+    )
   );
   return looseArticles;
 }
 
+function isChatGPTPairDom() {
+  return Boolean(
+    document.querySelector(CHATGPT_PAIR_TIMELINE_SEL) &&
+    getTopLevelChatGPTPairTurns().length > 0
+  );
+}
+
 async function extractChatGPTConversation() {
+  if (isChatGPTPairDom()) {
+    return extractChatGPTPairDomConversation();
+  }
+  return extractChatGPTLegacyConversation();
+}
+
+async function extractChatGPTLegacyConversation() {
   const startTime = Date.now();
   const turns = [];
   const errors = [];
@@ -554,7 +585,7 @@ async function extractChatGPTConversation() {
   );
 
   const finalContainers = getChatGPTTurnContainerNodes();
-  console.log(`[Chat Archive] ChatGPT: Found ${finalContainers.length} turn containers`);
+  console.log(`[Chat Archive] ChatGPT legacy: Found ${finalContainers.length} turn containers`);
 
   if (finalContainers.length === 0) {
     return {
@@ -582,19 +613,21 @@ async function extractChatGPTConversation() {
       container.scrollIntoView({ behavior: 'instant', block: 'center' });
       await wait(150);
 
-      const turn = await extractChatGPTTurn(container, hasClipboard, i + 1);
+      const turn = await extractChatGPTLegacyTurn(container, hasClipboard, i + 1);
       if (turn) turns.push(flagIfOversized(turn));
     } catch (err) {
       errors.push(`Error extracting turn ${i}: ${err.message}`);
-      console.warn(`[Chat Archive] ChatGPT: Error on turn ${i}:`, err);
+      console.warn(`[Chat Archive] ChatGPT legacy: Error on turn ${i}:`, err);
     }
   }
 
-  console.log(`[Chat Archive] ChatGPT: Extracted ${turns.length} turns, ${errors.length} errors`);
+  console.log(
+    `[Chat Archive] ChatGPT legacy: Extracted ${turns.length} turns, ${errors.length} errors`
+  );
   return { turns, errors, partial: errors.length > 0 };
 }
 
-async function extractChatGPTTurn(container, hasClipboard, sequentialTurnNumber) {
+async function extractChatGPTLegacyTurn(container, hasClipboard, sequentialTurnNumber) {
   let role = container.getAttribute('data-message-author-role');
   if (!role) role = container.getAttribute('data-turn');
 
@@ -676,6 +709,243 @@ async function extractChatGPTTurn(container, hasClipboard, sequentialTurnNumber)
   };
 }
 
+function directNodeText(node) {
+  return node?.textContent?.replace(/\u00a0/g, ' ').trim() || '';
+}
+
+function extractChatGPTPairDomPair(group) {
+  const key = group.getAttribute('data-turn-key') || '';
+
+  const userBubble = group.querySelector(CHATGPT_PAIR_USER_SEL);
+  const userTextNode =
+    userBubble?.querySelector('.whitespace-pre-wrap') ||
+    userBubble?.querySelector('[data-user-message-copy]') ||
+    userBubble;
+  const userContent = directNodeText(userTextNode);
+
+  const assistantBlocks = Array.from(
+    group.querySelectorAll('[data-markdown-text-style="assistant-message"]')
+  ).filter((block) => block.getAttribute('data-markdown-text-tone') !== 'tertiary');
+
+  const assistantParts = assistantBlocks
+    .map((block) => directNodeText(block))
+    .filter((part) => part.length > 0);
+
+  return {
+    key,
+    userContent,
+    assistantContent: assistantParts.join('\n\n').trim(),
+  };
+}
+
+function chatGPTPairDomPosition(group, scrollContainer) {
+  const rect = group.getBoundingClientRect();
+  const position = rect.top + scrollContainer.scrollTop;
+  return Number.isFinite(position) ? position : 0;
+}
+
+function captureChatGPTPairDomWindow(scrollContainer, collected, sequenceRef) {
+  const groups = getTopLevelChatGPTPairTurns(scrollContainer);
+  let pending = 0;
+
+  for (const group of groups) {
+    const pair = extractChatGPTPairDomPair(group);
+    if (!pair.key) continue;
+
+    if (!pair.userContent && !pair.assistantContent) {
+      pending++;
+      continue;
+    }
+
+    const existing = collected.get(pair.key);
+    if (existing) {
+      if (pair.userContent.length > existing.userContent.length) {
+        existing.userContent = pair.userContent;
+      }
+      if (pair.assistantContent.length > existing.assistantContent.length) {
+        existing.assistantContent = pair.assistantContent;
+      }
+      continue;
+    }
+
+    collected.set(pair.key, {
+      ...pair,
+      position: chatGPTPairDomPosition(group, scrollContainer),
+      sequence: sequenceRef.value++,
+    });
+  }
+
+  return pending;
+}
+
+async function awaitChatGPTOlderPairHistory(scrollContainer, startTime) {
+  const initialHeight = scrollContainer.scrollHeight;
+  const waitStarted = Date.now();
+
+  while (Date.now() - waitStarted < CHATGPT_PAIR_HISTORY_WAIT_MS) {
+    if (Date.now() - startTime > SAFETY_LIMITS.MAX_EXTRACTION_TIME_MS) return false;
+
+    const travel = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+    scrollContainer.scrollTop = -travel;
+    await wait(Math.min(SAFETY_LIMITS.SCROLL_STEP_DELAY_MS, 250));
+
+    if (scrollContainer.scrollHeight !== initialHeight) return true;
+  }
+
+  return scrollContainer.scrollHeight !== initialHeight;
+}
+
+async function sweepChatGPTPairDomUpward(scrollContainer, startTime, collected) {
+  const sequenceRef = { value: 0 };
+  let stalls = 0;
+  let steps = 0;
+
+  scrollContainer.scrollTop = 0;
+  await wait(SAFETY_LIMITS.SCROLL_STEP_DELAY_MS);
+  if (captureChatGPTPairDomWindow(scrollContainer, collected, sequenceRef) > 0) {
+    await wait(150);
+    captureChatGPTPairDomWindow(scrollContainer, collected, sequenceRef);
+  }
+
+  while (steps++ < CHATGPT_PAIR_MAX_SCROLL_STEPS) {
+    if (Date.now() - startTime > SAFETY_LIMITS.MAX_EXTRACTION_TIME_MS) {
+      return { complete: false, reason: 'timeout', steps };
+    }
+
+    const beforeTop = scrollContainer.scrollTop;
+    const beforeCount = collected.size;
+    const step = Math.max(scrollContainer.clientHeight * 0.75, 200);
+
+    scrollContainer.scrollTop = beforeTop - step;
+    await wait(SAFETY_LIMITS.SCROLL_STEP_DELAY_MS);
+
+    if (captureChatGPTPairDomWindow(scrollContainer, collected, sequenceRef) > 0) {
+      await wait(150);
+      captureChatGPTPairDomWindow(scrollContainer, collected, sequenceRef);
+    }
+
+    if (scrollContainer.scrollTop < beforeTop || collected.size > beforeCount) {
+      stalls = 0;
+      continue;
+    }
+
+    const travel = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+    const top = -travel;
+
+    if (scrollContainer.scrollTop <= top + 1) {
+      const loadedOlder = await awaitChatGPTOlderPairHistory(scrollContainer, startTime);
+      if (loadedOlder) {
+        stalls = 0;
+        continue;
+      }
+
+      captureChatGPTPairDomWindow(scrollContainer, collected, sequenceRef);
+      return { complete: true, reason: null, steps };
+    }
+
+    if (++stalls >= SAFETY_LIMITS.SCROLL_STABILITY_THRESHOLD) {
+      return { complete: false, reason: 'stalled before oldest turn', steps };
+    }
+  }
+
+  return { complete: false, reason: 'scroll-step limit', steps };
+}
+
+async function extractChatGPTPairDomConversation() {
+  const startTime = Date.now();
+  const errors = [];
+  const turns = [];
+  const collected = new Map();
+
+  const scrollContainer = findChatGPTScrollContainer();
+  if (!scrollContainer) {
+    return { turns: [], errors: ['Scroll container not found'], partial: true };
+  }
+
+  const originalScrollTop = scrollContainer.scrollTop;
+
+  if (document.visibilityState === 'hidden') {
+    return {
+      turns: [],
+      errors: [
+        'ChatGPT virtualizes long transcripts. Keep the ChatGPT tab visible while exporting, then try again.',
+      ],
+      partial: true,
+    };
+  }
+
+  let sweepResult;
+  try {
+    sweepResult = await sweepChatGPTPairDomUpward(scrollContainer, startTime, collected);
+  } finally {
+    scrollContainer.scrollTop = originalScrollTop;
+  }
+
+  if (!sweepResult?.complete) {
+    errors.push(
+      `Could not confirm the full ChatGPT transcript was loaded (${sweepResult?.reason || 'unknown reason'}).`
+    );
+  }
+
+  const pairs = Array.from(collected.values()).sort((a, b) => {
+    if (a.position !== b.position) return a.position - b.position;
+    return a.sequence - b.sequence;
+  });
+
+  for (const pair of pairs) {
+    if (turns.length >= SAFETY_LIMITS.MAX_TURNS) {
+      errors.push(`Hit maximum turn limit (${SAFETY_LIMITS.MAX_TURNS})`);
+      break;
+    }
+
+    if (pair.userContent) {
+      turns.push(
+        flagIfOversized({
+          role: 'user',
+          content: pair.userContent,
+          turnNumber: turns.length + 1,
+          turnId: `${pair.key}:user`,
+          extractionMethod: 'direct',
+          confidence: 0.99,
+          classificationSource: 'structural',
+        })
+      );
+    }
+
+    if (pair.assistantContent) {
+      if (turns.length >= SAFETY_LIMITS.MAX_TURNS) {
+        errors.push(`Hit maximum turn limit (${SAFETY_LIMITS.MAX_TURNS})`);
+        break;
+      }
+      turns.push(
+        flagIfOversized({
+          role: 'assistant',
+          content: pair.assistantContent,
+          turnNumber: turns.length + 1,
+          turnId: `${pair.key}:assistant`,
+          extractionMethod: 'direct',
+          confidence: 0.99,
+          classificationSource: 'structural',
+        })
+      );
+    }
+  }
+
+  if (turns.length === 0) {
+    errors.push('No conversation messages found in ChatGPT app-shell layout');
+  }
+
+  console.log(
+    `[Chat Archive] ChatGPT pair DOM: Collected ${pairs.length} exchanges / ${turns.length} messages`
+  );
+
+  return {
+    turns,
+    errors,
+    partial: errors.length > 0 || turns.length === 0,
+  };
+}
+
 function extractChatGPTDirectText(container, role) {
   const msgContent = container.querySelector('[data-message-content]');
   if (msgContent) {
@@ -698,8 +968,11 @@ function extractChatGPTDirectText(container, role) {
 }
 
 function findChatGPTScrollContainer() {
+  const pairTimeline = document.querySelector(CHATGPT_PAIR_TIMELINE_SEL);
+  if (pairTimeline) return pairTimeline;
+
   const firstTurn = document.querySelector(
-    'article[data-testid^="conversation-turn-"], [data-testid^="conversation-turn-"], [data-message-author-role="user"], [data-message-author-role="assistant"]'
+    'article[data-testid^="conversation-turn-"], [data-testid^="conversation-turn-"], [data-message-author-role="user"], [data-message-author-role="assistant"], [data-turn-key]'
   );
 
   const strategies = [
@@ -709,7 +982,7 @@ function findChatGPTScrollContainer() {
     () => {
       const main = document.querySelector('main');
       if (!main) return null;
-      const last = main.querySelector('[data-message-author-role], article');
+      const last = main.querySelector('[data-message-author-role], [data-turn-key], article');
       return last ? findScrollableAncestor(last) : findScrollableAncestor(main);
     },
   ];
@@ -780,7 +1053,7 @@ function isLikelyChatGPTFileUrl(absUrl, options) {
   if (onOpenAIAsset) {
     if (isOaiUserContentChatAttachmentUrl(u)) return true;
     if (opts.allowLooseOaiImage && opts.element) {
-      const inUser = opts.element.closest('[data-message-author-role="user"]');
+      const inUser = opts.element.closest('[data-message-author-role="user"], [data-user-message-bubble]');
       if (inUser && /\.(png|jpe?g|gif|webp|svg|heic)(\?|#|$)/i.test(path)) return true;
     }
     return false;
@@ -802,10 +1075,24 @@ function isLikelyChatGPTFileUrl(absUrl, options) {
 function inferChatGPTAttachmentContext(el) {
   let role = 'unknown';
   let turnNumber = 0;
+
   const msg = el.closest('[data-message-author-role="user"], [data-message-author-role="assistant"]');
   if (msg) {
     role = msg.getAttribute('data-message-author-role') || 'unknown';
   }
+
+  const pairTurn = el.closest('[data-turn-key]');
+  if (pairTurn) {
+    if (el.closest('[data-user-message-bubble]')) role = 'user';
+    else if (
+      el.closest(
+        '[data-markdown-text-style="assistant-message"], [data-conversation-role="assistant"]'
+      )
+    ) {
+      role = 'assistant';
+    }
+  }
+
   const turnEl = el.closest('[data-testid^="conversation-turn-"]');
   if (turnEl) {
     const tid = turnEl.getAttribute('data-testid') || '';
@@ -814,6 +1101,7 @@ function inferChatGPTAttachmentContext(el) {
     const dt = turnEl.getAttribute('data-turn');
     if (dt === 'user' || dt === 'assistant') role = dt;
   }
+
   return { role, turnNumber };
 }
 
@@ -975,7 +1263,7 @@ async function clickChatGPTNativeAttachmentDownloads() {
     maybeClick(el);
   }
 
-  const firstUser = document.querySelector('[data-message-author-role="user"]');
+  const firstUser = document.querySelector('[data-message-author-role="user"], [data-user-message-bubble]');
   if (firstUser) {
     firstUser.querySelectorAll('[role="button"], button, a').forEach(maybeClickFileChip);
   }
