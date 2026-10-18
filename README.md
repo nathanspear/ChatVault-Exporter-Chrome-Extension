@@ -1,6 +1,6 @@
 # ChatVault Exporter — Chrome extension
 
-**Version:** 0.9.8 (see `manifest.json`)
+**Version:** 0.9.9 (see `manifest.json`)
 
 Export AI chat conversations to **Markdown**, **JSON**, and/or **SDOC** (`.sdoc`) from the browser. Supports single-chat export on several platforms and **project batch export** on ChatGPT and Claude. On **ChatGPT**, you can also download **file attachments** from the open conversation.
 
@@ -126,6 +126,7 @@ Project slug defaults to **Unassigned** if the field is blank.
 | Issue | What to try |
 |-------|-------------|
 | **Content script not loaded** | Refresh the page; ensure the site URL is allowed. |
+| **ChatGPT: export incomplete or "keep the tab visible"** | ChatGPT virtualizes long chats. Keep the ChatGPT tab in the foreground while exporting and let the extension scroll; try again if it was hidden. |
 | **No conversation turns found** | Be on an actual chat URL with messages visible; hard-refresh. |
 | **Export Chat disabled** | Open a conversation (not only home/Recents), and enable at least one of Save as Markdown / JSON / SDOC. |
 | **Attachments: nothing downloaded** | Reload the chat tab; open the extension from that tab; ensure files appear in the UI. |
@@ -146,6 +147,7 @@ Project slug defaults to **Unassigned** if the field is blank.
 
 | Version | Notes |
 |---------|--------|
+| **0.9.9** | ChatGPT export works on the September 2026 app-shell layout (`[data-turn-key]` exchanges, virtualized reverse timeline). Legacy layout unchanged. Version now read from `manifest.json`. Contributed by Michael Snoyman ([PR #1](https://github.com/nathanspear/ChatVault-Exporter-Chrome-Extension/pull/1)). |
 | **0.9.8** | Fix Perplexity extraction: Perplexity removed `data-testid` attributes; selectors updated to `aria-label="Copy query"` / `aria-label="Copy"`. |
 | **0.9.7** | **Project name** field is **not persisted**; cleared on every popup open (legacy `userProjectName` removed from storage). |
 | **0.9.6** | **Create ZIP** applies to **single-chat** export too (one `.zip` with selected Markdown/JSON/SDOC). |
