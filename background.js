@@ -587,7 +587,7 @@ async function handleDownloadFromUrl({ url, filename }) {
 // ---------------------------------------------------------------------------
 
 // slugForExport and buildExportFilename are provided by filename-builder.js.
-const extensionVersion = '0.9.7';
+const extensionVersion = chrome.runtime.getManifest().version; // single source: manifest.json
 
 async function handleProjectExport({ project, userProjectName, chats, tabId, platform, includeMarkdown = true, includeJson = false, includeSdoc = false, createZip = false, zipJsZipDateMs }) {
   const authorizedProjectName = (userProjectName || '').trim() || null;

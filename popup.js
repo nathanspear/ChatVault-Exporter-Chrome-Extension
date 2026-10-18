@@ -1,5 +1,5 @@
 // =============================================================================
-// ChatVault — Popup Script  v0.9.7
+// ChatVault — Popup Script
 // =============================================================================
 // Manages the extension popup UI: platform detection, single-chat export,
 // and project-batch export for ChatGPT.

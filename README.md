@@ -4,7 +4,7 @@
 
 Export AI chat conversations to **Markdown**, **JSON**, and/or **SDOC** (`.sdoc`) from the browser. Supports single-chat export on several platforms and **project batch export** on ChatGPT and Claude. On **ChatGPT**, you can also download **file attachments** from the open conversation.
 
-Full project documentation (CLI, archive formats, ingest): [repository root README](../README.md).
+This extension is the browser half of the ChatVault Exporter project; the other half is a local CLI that ingests these exports into archives and SDOC. Project page and docs: [nathanspear.com/tools/chatvault](https://www.nathanspear.com/tools/chatvault).
 
 **Standalone repo:** This folder is mirrored as its own GitHub repo for extension-only users:  
 [github.com/nathanspear/ChatVault-Exporter-Chrome-Extension](https://github.com/nathanspear/ChatVault-Exporter-Chrome-Extension)
@@ -98,7 +98,7 @@ chatvault ingest --source extension-export --path ./ChatVault-export--ProjectNam
 chatvault export --format archive --out ./archive
 ```
 
-See [EXTENSION_INTEGRATION.md](../EXTENSION_INTEGRATION.md) in the repo.
+The CLI is part of the main ChatVault Exporter project (see the project page linked at the top).
 
 ---
 
@@ -158,3 +158,9 @@ Project slug defaults to **Unassigned** if the field is blank.
 | **0.8.x** | ChatGPT turn extraction fallbacks (`data-message-author-role`); attachment MVP. |
 
 Older entries are listed in git history and prior releases.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).

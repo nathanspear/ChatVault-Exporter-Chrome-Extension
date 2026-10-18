@@ -32,7 +32,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.9.7';
+const EXTENSION_VERSION = chrome.runtime.getManifest().version; // single source: manifest.json
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -2680,7 +2680,7 @@ function serializeToMarkdown(extraction, platform) {
     lines.push('');
   }
 
-  lines.push(`*Exported by Chat Archive v${EXTENSION_VERSION}*`);
+  lines.push(`*Exported by ChatVault Exporter v${EXTENSION_VERSION}*`);
 
   return {
     markdown: lines.join('\n'),
