@@ -87,7 +87,7 @@ async function waitForConversationReady(options = {}) {
     gemini: 'user-query, model-response',
     grok: '[class*="message"], [data-testid*="message"]',
     'grok-x': '[data-testid*="message"], [class*="message"]',
-    perplexity: 'button[aria-label="Copy query"], button[data-testid="copy-query-button"], .prose.text-pretty',
+    perplexity: 'button[aria-label="Copy query"], button[data-testid="copy-query-button"], .prose.text-pretty, .prose.dark\\:prose-invert',
   };
 
   const selector = selectors[platform];
@@ -2609,7 +2609,7 @@ async function extractPerplexityConversation(options = {}) {
   console.log('[Chat Archive] Perplexity: Starting scroll-to-load...');
   const scrollCount = await scrollToLoadAll(
     scrollContainer,
-    'button[aria-label="Copy query"], button[data-testid="copy-query-button"], button[aria-label="Copy Query"], .prose.text-pretty',
+    'button[aria-label="Copy query"], button[data-testid="copy-query-button"], button[aria-label="Copy Query"], .prose.text-pretty, .prose.dark\\:prose-invert',
     startTime
   );
   console.log('[Chat Archive] Perplexity: Scroll complete, performed', scrollCount, 'scrolls');
@@ -2673,10 +2673,22 @@ async function extractPerplexityConversation(options = {}) {
   return { turns, errors, partial: errors.length > 0 };
 }
 
+// 2026-10 layout: user text is div.whitespace-pre-wrap.break-words inside a group/user-bubble;
+// answers are .prose.dark:prose-invert without text-pretty. Older selectors kept after them.
+const PERPLEXITY_USER_TEXT_SELECTORS = [
+  '[class*="group/user-bubble"] .whitespace-pre-wrap.break-words',
+  '.whitespace-pre-line.text-pretty.break-words',
+  'span[data-lexical-text="true"]',
+  'span.select-text',
+];
+const PERPLEXITY_USER_ROOT_SEL = PERPLEXITY_USER_TEXT_SELECTORS.join(', ');
+const PERPLEXITY_ANSWER_ROOT_SEL =
+  '.prose.dark\\:prose-invert, .prose.text-pretty, [data-testid="answer"], [data-testid="assistant"]';
+
 function findPerplexityUserRoot(btn) {
   let node = btn;
   for (let d = 0; d < 12 && node && node !== document.body; d++) {
-    if (node.querySelector?.('.whitespace-pre-line.text-pretty.break-words, span[data-lexical-text="true"], span.select-text')) {
+    if (node.querySelector?.(PERPLEXITY_USER_ROOT_SEL)) {
       return node;
     }
     node = node.parentElement;
@@ -2687,7 +2699,7 @@ function findPerplexityUserRoot(btn) {
 function findPerplexityAssistantRoot(btn) {
   let node = btn;
   for (let d = 0; d < 12 && node && node !== document.body; d++) {
-    if (node.querySelector?.('.prose.text-pretty, [data-testid="answer"], [data-testid="assistant"]')) {
+    if (node.querySelector?.(PERPLEXITY_ANSWER_ROOT_SEL)) {
       return node;
     }
     node = node.parentElement;
@@ -2697,14 +2709,17 @@ function findPerplexityAssistantRoot(btn) {
 
 function extractPerplexityUserDirectText(btn) {
   const root = findPerplexityUserRoot(btn);
-  const textEl = root?.querySelector('.whitespace-pre-line.text-pretty.break-words, span[data-lexical-text="true"], span.select-text');
-  if (textEl) return textEl.textContent?.trim() || '';
+  // In priority order, so the scoped user-bubble match wins over a looser one.
+  for (const sel of PERPLEXITY_USER_TEXT_SELECTORS) {
+    const textEl = root?.querySelector(sel);
+    if (textEl) return textEl.textContent?.trim() || '';
+  }
   return root?.textContent?.trim() || '';
 }
 
 function extractPerplexityAssistantDirectText(btn) {
   const root = findPerplexityAssistantRoot(btn);
-  const prose = root?.querySelector('.prose.text-pretty.dark\\:prose-invert, .prose, [data-testid="answer"], [data-testid="assistant"]');
+  const prose = root?.querySelector('.prose.dark\\:prose-invert, .prose.text-pretty, .prose, [data-testid="answer"], [data-testid="assistant"]');
   if (prose) return prose.textContent?.trim() || '';
   const clone = root?.cloneNode(true);
   if (clone) {
