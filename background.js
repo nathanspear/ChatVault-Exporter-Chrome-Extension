@@ -47,6 +47,9 @@ importScripts('jszip.min.js');
 importScripts('filename-builder.js');
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Messages tagged for the offscreen document are answered by offscreen.js, not here.
+  if (!message || message.target === 'offscreen') return;
+
   if (message.action === 'download') {
     handleDownload(message)
       .then((result) => sendResponse(result))
@@ -259,7 +262,9 @@ async function handleChatGPTMainWorldHarvest(tabId) {
   }
 }
 
-// Data URLs work even if the service worker is killed; blob URLs can become invalid.
+// Payloads up to this size go out as data: URLs, which work even if the service worker is
+// killed. Anything larger needs a blob: URL, and URL.createObjectURL does not exist in an MV3
+// service worker, so those go through the offscreen document (see startTextDownload).
 const DATA_URL_MAX_CHARS = 1500000; // ~1.5 MB
 
 /** Optional subfolder under the browser’s default download directory (Windows/Mac/Linux). Synced with popup Settings. */
@@ -309,6 +314,169 @@ function broadcastExportProgress(payload) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Offscreen document: blob URLs for downloads too large for a data URL
+// ---------------------------------------------------------------------------
+// URL.createObjectURL does not exist in an MV3 service worker. offscreen.html
+// (reason BLOBS) builds the Blob and hands back a blob: URL; this worker starts
+// the download and asks the document to revoke the URL once
+// chrome.downloads.onChanged reports the download complete or interrupted.
+// The document is created on first use and reused; it is never closed here
+// because a download may still be reading from one of its blobs.
+const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
+const BLOB_URL_SESSION_KEY_PREFIX = 'pendingBlobUrl:';
+
+/** downloadId -> blob: URL the offscreen document still holds. Mirrored in storage.session. */
+const pendingBlobUrls = new Map();
+let creatingOffscreenDocument = null;
+
+async function hasOffscreenDocument() {
+  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH);
+  if (typeof chrome.runtime.getContexts === 'function') {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT'],
+      documentUrls: [offscreenUrl],
+    });
+    return contexts.length > 0;
+  }
+  // Chrome before 116 has no runtime.getContexts; fall back to the worker's client list.
+  const matched = await clients.matchAll();
+  return matched.some((c) => c.url === offscreenUrl);
+}
+
+/** Create the offscreen document unless one is already open. Safe to call concurrently. */
+async function ensureOffscreenDocument() {
+  if (await hasOffscreenDocument()) return;
+  if (creatingOffscreenDocument) {
+    await creatingOffscreenDocument;
+    return;
+  }
+  creatingOffscreenDocument = (async () => {
+    try {
+      await chrome.offscreen.createDocument({
+        url: OFFSCREEN_DOCUMENT_PATH,
+        reasons: ['BLOBS'],
+        justification: 'Build blob URLs for exports too large for a data URL; URL.createObjectURL is unavailable in the service worker.',
+      });
+    } catch (err) {
+      // Only one offscreen document may exist. If another caller won the race, carry on.
+      if (await hasOffscreenDocument()) return;
+      throw err;
+    }
+  })();
+  try {
+    await creatingOffscreenDocument;
+  } finally {
+    creatingOffscreenDocument = null;
+  }
+}
+
+function sendToOffscreen(payload) {
+  return chrome.runtime.sendMessage({ target: 'offscreen', ...payload });
+}
+
+/** Ask the offscreen document to drop a blob URL. The document may be gone already; that is fine. */
+async function revokeOffscreenBlobUrl(url) {
+  if (!url) return;
+  try {
+    await sendToOffscreen({ action: 'revokeBlobUrl', url });
+  } catch {
+    // No offscreen document is listening (extension reload, browser restart). Nothing to revoke.
+  }
+}
+
+function rememberPendingBlobUrl(downloadId, url) {
+  pendingBlobUrls.set(downloadId, url);
+  try {
+    chrome.storage.session.set({ [BLOB_URL_SESSION_KEY_PREFIX + downloadId]: url }).catch(() => {});
+  } catch {
+    // storage.session unavailable; the in-memory map still covers the common case.
+  }
+}
+
+/** Revoke the blob URL behind a finished or failed download, if one is pending. */
+async function releaseBlobUrlForDownload(downloadId) {
+  const key = BLOB_URL_SESSION_KEY_PREFIX + downloadId;
+  let url = pendingBlobUrls.get(downloadId);
+  pendingBlobUrls.delete(downloadId);
+  if (!url) {
+    // The worker may have been restarted since the download began; check the session mirror.
+    try {
+      const stored = await chrome.storage.session.get(key);
+      url = stored[key];
+    } catch {
+      url = undefined;
+    }
+  }
+  try {
+    await chrome.storage.session.remove(key);
+  } catch {
+    // ignore
+  }
+  if (url) await revokeOffscreenBlobUrl(url);
+}
+
+// Registered at top level so the event wakes the worker after it has been suspended.
+chrome.downloads.onChanged.addListener((delta) => {
+  const state = delta && delta.state && delta.state.current;
+  if (state !== 'complete' && state !== 'interrupted') return;
+  releaseBlobUrlForDownload(delta.id).catch((err) => {
+    console.warn('[ChatVault] Could not release blob URL for download', delta.id, err);
+  });
+});
+
+/**
+ * Download content that is too large for a data URL. The offscreen document builds the Blob
+ * and returns a blob: URL for chrome.downloads. Resolves with the download id.
+ * @param {{ content: string, filename: string, mimeType: string }} opts filename already carries the export subfolder prefix
+ */
+async function downloadViaOffscreenBlob({ content, filename, mimeType }) {
+  await ensureOffscreenDocument();
+  const resp = await sendToOffscreen({ action: 'createBlobUrl', content, mimeType });
+  if (!resp || !resp.success || typeof resp.url !== 'string') {
+    throw new Error((resp && resp.error) || 'Offscreen document did not return a blob URL');
+  }
+  const url = resp.url;
+  let downloadId;
+  try {
+    downloadId = await chrome.downloads.download({ url, filename, saveAs: false });
+  } catch (err) {
+    await revokeOffscreenBlobUrl(url);
+    throw err;
+  }
+  rememberPendingBlobUrl(downloadId, url);
+  // A local blob can finish before download() resolves, in which case onChanged already fired
+  // and found nothing to release. Check once so the URL is not held until the next reload.
+  try {
+    const [item] = await chrome.downloads.search({ id: downloadId });
+    if (item && (item.state === 'complete' || item.state === 'interrupted')) {
+      await releaseBlobUrlForDownload(downloadId);
+    }
+  } catch {
+    // search failed; onChanged stays the primary path.
+  }
+  return downloadId;
+}
+
+/**
+ * Shared download path for single-chat and project exports. Small strings travel as data URLs
+ * (they survive worker suspension); anything larger goes through the offscreen document.
+ * Resolves with the download id, rejects on any failure.
+ */
+async function startTextDownload({ content, filename, mimeType }) {
+  const outName = await withExportSubfolder(filename);
+  const type = mimeType || 'text/plain';
+  if (typeof content === 'string' && content.length <= DATA_URL_MAX_CHARS) {
+    const base64 = btoa(unescape(encodeURIComponent(content)));
+    return chrome.downloads.download({
+      url: `data:${type};base64,${base64}`,
+      filename: outName,
+      saveAs: false,
+    });
+  }
+  return downloadViaOffscreenBlob({ content, filename: outName, mimeType: type });
+}
+
 // handleDownload is used for single-chat exports.
 // Uses saveAs: false to download directly to browser's Downloads folder (no dialog),
 // matching project export behavior.
@@ -352,6 +520,9 @@ async function handleDownloadZip({ folderName, files }) {
       return { success: false, error: 'No valid files to include in ZIP' };
     }
     const zipFilename = `${prefix}.zip`;
+    // TODO: no size cap here. The whole ZIP becomes one base64 string and then a data URL;
+    // whether Chrome accepts that past a few MB is unverified. If it fails, route it through
+    // the offscreen document like the flat files (downloadViaOffscreenBlob, binary payload).
     const zipBase64 = await zip.generateAsync({ type: 'base64', streamFiles: false });
     const downloadId = await chrome.downloads.download({
       url: `data:application/zip;base64,${zipBase64}`,
@@ -367,23 +538,7 @@ async function handleDownloadZip({ folderName, files }) {
 
 async function handleDownload({ content, filename, mimeType }) {
   try {
-    const len = typeof content === 'string' ? content.length : (content && content.size) || 0;
-    let url;
-
-    if (len <= DATA_URL_MAX_CHARS && typeof content === 'string') {
-      const base64 = btoa(unescape(encodeURIComponent(content)));
-      url = `data:${mimeType};base64,${base64}`;
-    } else {
-      const blob = new Blob([content], { type: mimeType });
-      url = URL.createObjectURL(blob);
-      setTimeout(() => URL.revokeObjectURL(url), 15_000);
-    }
-
-    const downloadId = await chrome.downloads.download({
-      url,
-      filename: await withExportSubfolder(filename),
-      saveAs: false,
-    });
+    const downloadId = await startTextDownload({ content, filename, mimeType });
     return { success: true, downloadId };
   } catch (err) {
     console.error('[ChatVault] handleDownload failed:', err);
@@ -602,6 +757,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
   const collectedFiles = []; // { filename, content, mimeType }
   const chatIndex = [];      // { title, filename, url }
   const failedChats = [];    // { title, url, error }
+  const failedDownloads = []; // { filename, error }: files that never reached chrome.downloads
 
   let successCount = 0;
   let errorCount   = 0;
@@ -856,6 +1012,9 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
       zip.file(`${folderName}/${file.filename}`, file.content, { date: entryMtime });
     }
     zipFilename = `${folderName}.zip`;
+    // TODO: no size cap here. The whole ZIP becomes one base64 string and then a data URL;
+    // whether Chrome accepts that past a few MB is unverified. If it fails, route it through
+    // the offscreen document like the flat files (downloadViaOffscreenBlob, binary payload).
     const zipBase64 = await zip.generateAsync({ type: 'base64', streamFiles: false });
     await chrome.downloads.download({
       url:      `data:application/zip;base64,${zipBase64}`,
@@ -864,15 +1023,35 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
     });
   } else {
     for (const file of allFiles) {
-      await triggerDownload(`${folderName}/${file.filename}`, file.content, file.mimeType);
+      const result = await triggerDownload(`${folderName}/${file.filename}`, file.content, file.mimeType);
+      if (!result.success) {
+        failedDownloads.push({ filename: file.filename, error: result.error || 'Unknown error' });
+      }
+    }
+    if (failedDownloads.length === allFiles.length) {
+      // Nothing reached chrome.downloads. Report a failure, not an export that landed.
+      return {
+        success:      false,
+        error:        `No files could be saved (${failedDownloads[0].error}).`,
+        chatCount:    successCount,
+        errors:       errorCount,
+        failedChats,
+        failedDownloads,
+        folderName,
+        zipFilename:  null,
+        downloadMode: 'folder',
+      };
     }
   }
 
   if (chrome.notifications) {
     const countLabel = `${successCount} chat${successCount !== 1 ? 's' : ''} exported`;
+    const notSaved = failedDownloads.length > 0
+      ? ` ${failedDownloads.length} file${failedDownloads.length !== 1 ? 's' : ''} not saved.`
+      : '';
     const body = createZip
       ? `${zipFilename} · ${countLabel} (ZIP only).`
-      : `${folderName}/ · ${countLabel}.`;
+      : `${folderName}/ · ${countLabel}.${notSaved}`;
     chrome.notifications.create({
       type:     'basic',
       iconUrl:  'icons/icon48.png',
@@ -886,6 +1065,7 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
     chatCount:  successCount,
     errors:     errorCount,
     failedChats,
+    failedDownloads,
     folderName,
     zipFilename,
     downloadMode: createZip ? 'zip_only' : 'folder',
@@ -895,22 +1075,17 @@ async function handleProjectExport({ project, userProjectName, chats, tabId, pla
 // ---------------------------------------------------------------------------
 // Helpers: download a single text file
 // ---------------------------------------------------------------------------
+/**
+ * Download one project-export file. Never throws: resolves with { success, downloadId } or
+ * { success: false, error } so handleProjectExport can count what did not land.
+ */
 async function triggerDownload(filename, content, mimeType) {
   try {
-    const outName = await withExportSubfolder(filename);
-    const len = typeof content === 'string' ? content.length : 0;
-    let url;
-    if (len <= DATA_URL_MAX_CHARS) {
-      const base64 = btoa(unescape(encodeURIComponent(content)));
-      url = `data:${mimeType};base64,${base64}`;
-    } else {
-      const blob = new Blob([content], { type: mimeType });
-      url = URL.createObjectURL(blob);
-      setTimeout(() => URL.revokeObjectURL(url), 15_000);
-    }
-    await chrome.downloads.download({ url, filename: outName, saveAs: false });
+    const downloadId = await startTextDownload({ content, filename, mimeType });
+    return { success: true, downloadId };
   } catch (err) {
     console.error('[ChatVault] triggerDownload failed for', filename, err);
+    return { success: false, error: err && err.message ? err.message : String(err) };
   }
 }
 

@@ -10,7 +10,8 @@
     "storage",
     "clipboardRead",
     "tabs",
-    "notifications"
+    "notifications",
+    "offscreen"
   ],
   "host_permissions": [
     "https://claude.ai/*",

@@ -895,36 +895,52 @@ exportProjectBtn.addEventListener('click', async () => {
     });
 
     if (response && response.success) {
-      const failedCount = response.failedChats?.length || 0;
+      const failedChats = Array.isArray(response.failedChats) ? response.failedChats : [];
+      const failedDownloads = Array.isArray(response.failedDownloads) ? response.failedDownloads : [];
+      const failedCount = failedChats.length;
+      const failedDownloadCount = failedDownloads.length;
       const outputRows = response.downloadMode === 'zip_only'
         ? `<div class="stat"><span class="stat-label">ZIP file</span><span class="stat-value">${escapeHtml(response.zipFilename || '')}</span></div>`
         : `<div class="stat"><span class="stat-label">Folder</span><span class="stat-value">${escapeHtml(response.folderName || '')}</span></div>`;
 
-      if (failedCount > 0) {
-        // Some chats failed - show warning with details
-        const failedTitles = response.failedChats
-          .slice(0, 5)
-          .map((c) => c.title)
-          .join(', ');
-        const moreText = failedCount > 5 ? ` (+${failedCount - 5} more)` : '';
-        
-        showStatus(
-          'warning',
-          `${response.chatCount} exported, ${failedCount} failed: ${failedTitles}${moreText}. Re-export failed chats individually.`
-        );
-        
-        // Show failed chats list in results
-        const failedListHtml = response.failedChats
-          .map((c) => `<li>${escapeHtml(c.title)}</li>`)
-          .join('');
+      if (failedCount > 0 || failedDownloadCount > 0) {
+        // Some chats failed to extract, or some files never reached the Downloads folder.
+        const parts = [`${response.chatCount} exported`];
+        if (failedCount > 0) {
+          const failedTitles = failedChats
+            .slice(0, 5)
+            .map((c) => escapeHtml(String(c.title || '')))
+            .join(', ');
+          const moreText = failedCount > 5 ? ` (+${failedCount - 5} more)` : '';
+          parts.push(`${failedCount} failed: ${failedTitles}${moreText}`);
+        }
+        if (failedDownloadCount > 0) {
+          parts.push(`${failedDownloadCount} file${failedDownloadCount !== 1 ? 's' : ''} not saved`);
+        }
+        const hint = failedCount > 0
+          ? ' Re-export failed chats individually.'
+          : ' Check the list below and run the export again.';
+        showStatus('warning', `${parts.join(', ')}.${hint}`);
+
+        const failedChatsHtml = failedCount > 0
+          ? `<div class="failed-chats-list" style="margin-top: 8px; font-size: 11px; color: #e74c3c;">
+            <strong>Failed chats:</strong>
+            <ul style="margin: 4px 0 0 16px; padding: 0;">${failedChats.map((c) => `<li>${escapeHtml(String(c.title || ''))}</li>`).join('')}</ul>
+          </div>`
+          : '';
+        const failedDownloadsHtml = failedDownloadCount > 0
+          ? `<div class="failed-downloads-list" style="margin-top: 8px; font-size: 11px; color: #e74c3c;">
+            <strong>Files not saved:</strong>
+            <ul style="margin: 4px 0 0 16px; padding: 0;">${failedDownloads.map((f) => `<li>${escapeHtml(String(f.filename || ''))}${f.error ? ` <span style="color: #666;">(${escapeHtml(String(f.error))})</span>` : ''}</li>`).join('')}</ul>
+          </div>`
+          : '';
         resultsEl.innerHTML = `
           <div class="stat"><span class="stat-label">Exported</span><span class="stat-value">${response.chatCount}</span></div>
-          <div class="stat"><span class="stat-label">Failed</span><span class="stat-value" style="color: #e74c3c;">${failedCount}</span></div>
+          ${failedCount > 0 ? `<div class="stat"><span class="stat-label">Failed chats</span><span class="stat-value" style="color: #e74c3c;">${failedCount}</span></div>` : ''}
+          ${failedDownloadCount > 0 ? `<div class="stat"><span class="stat-label">Files not saved</span><span class="stat-value" style="color: #e74c3c;">${failedDownloadCount}</span></div>` : ''}
           ${outputRows}
-          <div class="failed-chats-list" style="margin-top: 8px; font-size: 11px; color: #e74c3c;">
-            <strong>Failed chats:</strong>
-            <ul style="margin: 4px 0 0 16px; padding: 0;">${failedListHtml}</ul>
-          </div>
+          ${failedChatsHtml}
+          ${failedDownloadsHtml}
         `;
       } else {
         // All succeeded
