@@ -4,7 +4,7 @@
 
 Export AI chat conversations to **Markdown**, **JSON**, and/or **SDOC** (`.sdoc`) from the browser. Supports single-chat export on several platforms and **project batch export** on ChatGPT and Claude. On **ChatGPT**, you can also download **file attachments** from the open conversation.
 
-This extension is the browser half of the ChatVault Exporter project; the other half is a local CLI that ingests these exports into archives and SDOC. Project page and docs: [nathanspear.com/tools/chatvault](https://www.nathanspear.com/tools/chatvault).
+This extension stands alone: it needs no server, account, or companion tool. Project page and docs: [nathanspear.com/tools/chatvault](https://www.nathanspear.com/tools/chatvault).
 
 **Standalone repo:** This folder is mirrored as its own GitHub repo for extension-only users:  
 [github.com/nathanspear/ChatVault-Exporter-Chrome-Extension](https://github.com/nathanspear/ChatVault-Exporter-Chrome-Extension)
@@ -89,16 +89,9 @@ This extension is the browser half of the ChatVault Exporter project; the other 
 
 If nothing is found, refresh the tab, ensure file chips are visible, and try again. Pure `blob:` URLs cannot be read by extensions; use ChatGPT’s UI for those.
 
-### Using exports with the ChatVault CLI
+### After export
 
-After exporting a project folder:
-
-```bash
-chatvault ingest --source extension-export --path ./ChatVault-export--ProjectName--YYYY-MM-DD
-chatvault export --format archive --out ./archive
-```
-
-The CLI is part of the main ChatVault Exporter project (see the project page linked at the top).
+Markdown opens in any editor. JSON keeps the turns structured for your own scripts and tooling. SDOC is a plain-text, brace-scoped format for agents and archives; see [entropicwarrior/sdoc](https://github.com/entropicwarrior/sdoc) for the format and its tooling.
 
 ---
 
