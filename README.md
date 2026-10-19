@@ -1,6 +1,6 @@
 # ChatVault Exporter — Chrome extension
 
-**Version:** 0.9.10 (see `manifest.json`)
+**Version:** 0.9.11 (see `manifest.json`)
 
 Export AI chat conversations to **Markdown**, **JSON**, and/or **SDOC** (`.sdoc`) from the browser. Supports single-chat export on several platforms and **project batch export** on ChatGPT and Claude. On **ChatGPT**, you can also download **file attachments** from the open conversation.
 
@@ -140,6 +140,7 @@ Project slug defaults to **Unassigned** if the field is blank.
 
 | Version | Notes |
 |---------|--------|
+| **0.9.11** | Claude.ai export works again after Claude's October 2026 move to a virtualized transcript (rows swept in order, scroll restored, partial export flagged if any row is missed). Perplexity user questions and answers read again after its class changes. Claude chat discovery prefers `/chat/` links. |
 | **0.9.10** | Project export no longer drops files over 1.5 MB: large downloads go through an offscreen document (`URL.createObjectURL` does not exist in the MV3 service worker). The popup now lists any files it could not save. New `offscreen` permission. |
 | **0.9.9** | ChatGPT export works on the September 2026 app-shell layout (`[data-turn-key]` exchanges, virtualized reverse timeline). Legacy layout unchanged. Version now read from `manifest.json`. Contributed by Michael Snoyman ([PR #1](https://github.com/nathanspear/ChatVault-Exporter-Chrome-Extension/pull/1)). |
 | **0.9.8** | Fix Perplexity extraction: Perplexity removed `data-testid` attributes; selectors updated to `aria-label="Copy query"` / `aria-label="Copy"`. |
