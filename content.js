@@ -83,7 +83,7 @@ async function waitForConversationReady(options = {}) {
   const selectors = {
     chatgpt:
       'article[data-testid^="conversation-turn-"], [data-testid^="conversation-turn-"], [data-message-author-role="user"], [data-message-author-role="assistant"], [data-turn-key]',
-    claude: '[data-testid="user-message"], .font-claude-message',
+    claude: '[data-testid="transcript-row"], [data-testid="user-message"], .font-claude-message',
     gemini: 'user-query, model-response',
     grok: '[class*="message"], [data-testid*="message"]',
     'grok-x': '[data-testid*="message"], [class*="message"]',
@@ -271,11 +271,287 @@ function flagIfOversized(turn) {
 // Chat Archive — Claude.ai Extractor (Pass 0 + Direct Text Fallback)
 // =============================================================================
 // Architecture: Appendix C
-// Turn container: div[data-test-render-count] wraps user+assistant pair
-// Copy buttons: button[data-testid="action-bar-copy"] on both roles
-// Role signals: [data-testid="user-message"] (user), [data-is-streaming] (assistant)
+// Two layouts exist:
+// Row DOM (2026-10): virtualized [data-testid="transcript-list"] with one
+//   [data-testid="transcript-row"] per message (data-index, data-perf-row="human"|"assistant"),
+//   holding [data-testid="user-message"] or [data-testid="assistant-message"].
+//   Copy is button[aria-label="Copy"] inside [data-testid="message-actions"].
+// Legacy: div[data-test-render-count] wraps user+assistant pair
+//   Copy buttons: button[data-testid="action-bar-copy"] on both roles
+//   Role signals: [data-testid="user-message"] (user), [data-is-streaming] (assistant)
+
+const CLAUDE_TRANSCRIPT_LIST_SEL = '[data-testid="transcript-list"]';
+const CLAUDE_TRANSCRIPT_ROW_SEL = '[data-testid="transcript-row"]';
+const CLAUDE_ROW_MAX_SCROLL_STEPS = 400;
+const CLAUDE_ROW_HISTORY_WAIT_MS = 1_500;
+
+function isClaudeRowDom() {
+  return Boolean(
+    document.querySelector(CLAUDE_TRANSCRIPT_LIST_SEL) &&
+    document.querySelector(`${CLAUDE_TRANSCRIPT_LIST_SEL} ${CLAUDE_TRANSCRIPT_ROW_SEL}`)
+  );
+}
+
+function findClaudeRowScrollContainer() {
+  const list = document.querySelector(CLAUDE_TRANSCRIPT_LIST_SEL);
+  if (!list) return null;
+  return findScrollableAncestor(list);
+}
+
+/**
+ * Text of an assistant message: the markdown blocks when present (skips tool and
+ * artifact chrome between them), else the whole message node.
+ */
+function extractClaudeRowAssistantText(messageEl) {
+  const blocks = Array.from(messageEl.querySelectorAll('.standard-markdown, .progressive-markdown'))
+    .filter((el) => !el.parentElement?.closest('.standard-markdown, .progressive-markdown'));
+  const parts = blocks.map((el) => directNodeText(el)).filter((t) => t.length > 0);
+  if (parts.length > 0) return parts.join('\n\n');
+  return directNodeText(messageEl);
+}
+
+function extractClaudeRow(row) {
+  const index = Number(row.getAttribute('data-index'));
+  if (!Number.isFinite(index)) return null;
+
+  const perfRow = row.getAttribute('data-perf-row');
+  const userEl = row.querySelector('[data-testid="user-message"]');
+  const assistantEl = row.querySelector('[data-testid="assistant-message"]');
+
+  let role = null;
+  if (perfRow === 'human') role = 'user';
+  else if (perfRow === 'assistant') role = 'assistant';
+  else if (userEl && !assistantEl) role = 'user';
+  else if (assistantEl && !userEl) role = 'assistant';
+
+  const messageEl = role === 'user' ? userEl : role === 'assistant' ? assistantEl : null;
+  const content = messageEl
+    ? (role === 'user' ? directNodeText(messageEl) : extractClaudeRowAssistantText(messageEl))
+    : '';
+
+  const timeEl = row.querySelector('time[datetime]');
+  const timestamp = timeEl?.getAttribute('datetime')?.trim() || undefined;
+
+  return { index, role, content, timestamp };
+}
+
+/**
+ * Read every rendered row into `collected` (keyed by data-index) and note each
+ * rendered index in `seen`. Returns how many rendered rows had no text yet.
+ */
+function captureClaudeRowWindow(collected, seen) {
+  const rows = document.querySelectorAll(`${CLAUDE_TRANSCRIPT_LIST_SEL} ${CLAUDE_TRANSCRIPT_ROW_SEL}`);
+  let pending = 0;
+
+  for (const row of rows) {
+    const entry = extractClaudeRow(row);
+    if (!entry) continue;
+
+    // Rendered counts as seen even with no text (attachment-only or tool-only turns).
+    seen.add(entry.index);
+
+    if (!entry.role || !entry.content) {
+      // Non-message row, or a message row not hydrated yet: retry once after a settle.
+      if (entry.role) pending++;
+      continue;
+    }
+
+    const existing = collected.get(entry.index);
+    if (existing) {
+      if (entry.content.length > existing.content.length) existing.content = entry.content;
+      if (!existing.timestamp && entry.timestamp) existing.timestamp = entry.timestamp;
+      continue;
+    }
+    collected.set(entry.index, entry);
+  }
+
+  return pending;
+}
+
+async function captureClaudeRowWindowSettled(collected, seen) {
+  if (captureClaudeRowWindow(collected, seen) > 0) {
+    await wait(150);
+    captureClaudeRowWindow(collected, seen);
+  }
+}
+
+/**
+ * Scroll range of the transcript scroller. Claude's list is expected to be
+ * top-down (scrollTop 0 = oldest); a column-reverse scroller (negative scrollTop
+ * toward older messages) is handled too so a layout flip fails loudly, not silently.
+ */
+function claudeRowScrollBounds(scrollContainer, reversed) {
+  const travel = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+  return reversed ? { oldest: -travel, newest: 0 } : { oldest: 0, newest: travel };
+}
+
+function isClaudeRowScrollerReversed(scrollContainer) {
+  const before = scrollContainer.scrollTop;
+  if (before < 0) return true;
+  scrollContainer.scrollTop = -1;
+  const reversed = scrollContainer.scrollTop < 0;
+  scrollContainer.scrollTop = before;
+  return reversed;
+}
+
+/** At the oldest end of the list, wait briefly in case older messages load in. */
+async function awaitClaudeOlderRows(scrollContainer, reversed, startTime) {
+  const initialHeight = scrollContainer.scrollHeight;
+  const waitStarted = Date.now();
+
+  while (Date.now() - waitStarted < CLAUDE_ROW_HISTORY_WAIT_MS) {
+    if (Date.now() - startTime > SAFETY_LIMITS.MAX_EXTRACTION_TIME_MS) return false;
+    scrollContainer.scrollTop = claudeRowScrollBounds(scrollContainer, reversed).oldest;
+    await wait(250);
+    if (scrollContainer.scrollHeight !== initialHeight) return true;
+  }
+  return scrollContainer.scrollHeight !== initialHeight;
+}
+
+/**
+ * Sweep the virtualized list from the oldest message to the newest,
+ * capturing rows as they render.
+ */
+async function sweepClaudeRowsTowardNewest(scrollContainer, startTime, collected, seen) {
+  const reversed = isClaudeRowScrollerReversed(scrollContainer);
+  let steps = 0;
+  let stalls = 0;
+
+  scrollContainer.scrollTop = claudeRowScrollBounds(scrollContainer, reversed).oldest;
+  await wait(SAFETY_LIMITS.SCROLL_STEP_DELAY_MS);
+  for (let i = 0; i < 10 && (await awaitClaudeOlderRows(scrollContainer, reversed, startTime)); i++) {
+    // Older history kept arriving; keep waiting at the oldest end.
+  }
+  await captureClaudeRowWindowSettled(collected, seen);
+
+  while (steps++ < CLAUDE_ROW_MAX_SCROLL_STEPS) {
+    if (Date.now() - startTime > SAFETY_LIMITS.MAX_EXTRACTION_TIME_MS) {
+      return { reachedEnd: false, reason: 'timeout', steps };
+    }
+
+    const beforeTop = scrollContainer.scrollTop;
+    const beforeCount = collected.size;
+    const step = Math.max(scrollContainer.clientHeight * 0.75, 200);
+
+    scrollContainer.scrollTop = beforeTop + step;
+    await wait(SAFETY_LIMITS.SCROLL_STEP_DELAY_MS);
+    await captureClaudeRowWindowSettled(collected, seen);
+
+    if (scrollContainer.scrollTop > beforeTop || collected.size > beforeCount) {
+      stalls = 0;
+      continue;
+    }
+
+    // scrollTop did not move: either at the newest end or the virtualizer is re-measuring.
+    if (++stalls >= SAFETY_LIMITS.SCROLL_STABILITY_THRESHOLD) {
+      const atEnd =
+        scrollContainer.scrollTop >= claudeRowScrollBounds(scrollContainer, reversed).newest - 2;
+      return { reachedEnd: atEnd, reason: atEnd ? null : 'stalled before newest message', steps };
+    }
+  }
+
+  return { reachedEnd: false, reason: 'scroll-step limit', steps };
+}
+
+/** Gaps between the lowest and highest rendered data-index (the index base is not assumed). */
+function findMissingClaudeRowIndices(seen) {
+  if (seen.size === 0) return [];
+  const indices = Array.from(seen).sort((a, b) => a - b);
+  const missing = [];
+  for (let k = 1; k < indices.length; k++) {
+    for (let i = indices[k - 1] + 1; i < indices[k]; i++) missing.push(i);
+  }
+  return missing;
+}
+
+async function extractClaudeRowDomConversation() {
+  const startTime = Date.now();
+  const errors = [];
+  const turns = [];
+  const collected = new Map();
+  const seen = new Set();
+
+  const scrollContainer = findClaudeRowScrollContainer();
+  if (!scrollContainer) {
+    return { turns: [], errors: ['Scroll container not found'], partial: true };
+  }
+
+  if (document.visibilityState === 'hidden') {
+    return {
+      turns: [],
+      errors: [
+        'Claude virtualizes long transcripts. Keep the Claude tab visible while exporting, then try again.',
+      ],
+      partial: true,
+    };
+  }
+
+  const originalScrollTop = scrollContainer.scrollTop;
+
+  let sweepResult;
+  try {
+    sweepResult = await sweepClaudeRowsTowardNewest(scrollContainer, startTime, collected, seen);
+  } finally {
+    scrollContainer.scrollTop = originalScrollTop;
+  }
+
+  const missing = findMissingClaudeRowIndices(seen);
+  if (missing.length > 0) {
+    const shown = missing.slice(0, 10).join(', ');
+    const more = missing.length > 10 ? ` and ${missing.length - 10} more` : '';
+    errors.push(`Could not confirm the full Claude transcript was loaded (missing rows: ${shown}${more}).`);
+  }
+  if (!sweepResult?.reachedEnd) {
+    errors.push(
+      `Could not confirm the full Claude transcript was loaded (${sweepResult?.reason || 'unknown reason'}).`
+    );
+  }
+
+  const entries = Array.from(collected.values()).sort((a, b) => a.index - b.index);
+
+  for (const entry of entries) {
+    if (turns.length >= SAFETY_LIMITS.MAX_TURNS) {
+      errors.push(`Hit maximum turn limit (${SAFETY_LIMITS.MAX_TURNS})`);
+      break;
+    }
+    turns.push(
+      flagIfOversized({
+        role: entry.role,
+        content: entry.content,
+        turnNumber: turns.length + 1,
+        turnId: `row-${entry.index}:${entry.role}`,
+        timestamp: entry.timestamp,
+        extractionMethod: 'direct',
+        confidence: 0.99,
+        classificationSource: 'structural',
+      })
+    );
+  }
+
+  if (turns.length === 0) {
+    errors.push('No conversation messages found in Claude transcript layout');
+  }
+
+  console.log(
+    `[Chat Archive] Claude row DOM: Collected ${entries.length} rows / ${turns.length} messages, ` +
+    `${missing.length} missing, ${sweepResult?.steps ?? 0} scroll steps`
+  );
+
+  return {
+    turns,
+    errors,
+    partial: errors.length > 0 || turns.length === 0,
+  };
+}
 
 async function extractClaudeConversation() {
+  if (isClaudeRowDom()) {
+    return extractClaudeRowDomConversation();
+  }
+  return extractClaudeLegacyConversation();
+}
+
+async function extractClaudeLegacyConversation() {
   const startTime = Date.now();
   const turns = [];
   const errors = [];
@@ -2822,7 +3098,10 @@ function inferChatStartedYyyyMmDdFromDom(platform) {
     const first = document.querySelector('[data-testid="user-message"]')
       || document.querySelector('.font-user-message');
     if (first) {
-      const pair = first.closest('[data-test-render-count]') || first.closest('.grid') || document.body;
+      const pair = first.closest('[data-testid="transcript-row"]')
+        || first.closest('[data-test-render-count]')
+        || first.closest('.grid')
+        || document.body;
       const timeEl = first.querySelector('time[datetime]')
         || (pair && pair.querySelector('time[datetime]'));
       if (timeEl) {
@@ -3509,6 +3788,9 @@ function discoverClaudeProjects() {
   return { projects };
 }
 
+// href first: the conversation-cell attribute matched nothing in the 2026-10 layout.
+const CLAUDE_CHAT_LINK_SEL = 'a[href^="/chat/"], a[data-dd-action-name="conversation-cell"]';
+
 async function discoverClaudeChatsInCurrentProject() {
   const chats = [];
   const seenIds = new Set();
@@ -3550,16 +3832,16 @@ async function discoverClaudeChatsInCurrentProject() {
   
   if (isProjectPage) {
     // Project is selected: only list chats in the main content. Exclude anything in left nav.
-    const allChatLinks = document.querySelectorAll('a[data-dd-action-name="conversation-cell"], a[href^="/chat/"]');
+    const allChatLinks = document.querySelectorAll(CLAUDE_CHAT_LINK_SEL);
     for (const link of allChatLinks) {
       if (isInsideLeftNav(link)) continue;
       addChat(link);
     }
   } else {
     // No project selected: scroll Recents list to load all lazy-rendered chat links, then discover.
-    await scrollRecentsListToLoadAll('a[data-dd-action-name="conversation-cell"], a[href^="/chat/"]');
+    await scrollRecentsListToLoadAll(CLAUDE_CHAT_LINK_SEL);
     for (const root of leftNavRoots) {
-      root.querySelectorAll('a[data-dd-action-name="conversation-cell"], a[href^="/chat/"]').forEach(addChat);
+      root.querySelectorAll(CLAUDE_CHAT_LINK_SEL).forEach(addChat);
     }
   }
   
