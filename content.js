@@ -3309,7 +3309,7 @@ function sdocCapitalizeRole(role) {
 
 /**
  * Serialize extracted turns into SDOC (brace-scoped, agent-friendly).
- * @see https://github.com/nathanspear/sdoc
+ * @see https://github.com/entropicwarrior/sdoc
  */
 function serializeToSdoc(extraction, platform, chatTitle, chatId) {
   const integrityWarnings = runIntegrityChecks(extraction.turns);
